@@ -550,7 +550,9 @@ async function exportCurrentPage(): Promise<void> {
         render();
       },
     });
-    outcome = { message: `ส่งออก ${format.toUpperCase()} แล้ว`, tone: "success" };
+    outcome = { message: runtime.project.colorMode === "cmyk"
+      ? `ส่งออก ${format.toUpperCase()} แบบ RGB แล้ว • CMYK ยังเป็น metadata`
+      : `ส่งออก ${format.toUpperCase()} แล้ว`, tone: "success" };
   } catch (error) {
     outcome = error instanceof DOMException && error.name === "AbortError"
       ? { message: "ยกเลิกการส่งออกแล้ว", tone: "default" }

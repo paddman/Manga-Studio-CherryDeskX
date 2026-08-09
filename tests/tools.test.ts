@@ -34,6 +34,9 @@ describe("typed tool registry", () => {
     expect(TOOL_DEFINITIONS.find((tool) => tool.id === "symmetry-ruler")?.capability).toBe("experimental");
     expect(TOOL_DEFINITIONS.find((tool) => tool.id === "content-aware-fill")?.engine).toBe("raster-content-fill");
     expect(TOOL_DEFINITIONS.find((tool) => tool.id === "content-aware-fill")?.capability).toBe("experimental");
+    expect(TOOL_DEFINITIONS.find((tool) => tool.id === "3d-object")?.reason).toContain("WebGL");
+    expect(TOOL_DEFINITIONS.find((tool) => tool.id === "audio-track")?.reason).toContain("audio timeline");
+    expect(TOOL_DEFINITIONS.find((tool) => tool.id === "remove")?.reason).toContain("inpainting");
   });
 
   it("resolves the standard keymap and supports a typed custom keymap", () => {

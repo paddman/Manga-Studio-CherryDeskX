@@ -148,7 +148,37 @@ const EXPERIMENTAL = new Set([
   "content-aware-fill",
 ]);
 
-const ADAPTERS = new Set(["select-subject", "object-selection", "content-aware-scale", "remove", "spot-healing", "healing-brush", "patch", "frequency-separation", "3d-object", "3d-pose", "3d-camera", "3d-light", "pose-scanner", "hand-scanner", "timeline", "keyframe", "cel", "animation-folder", "onion-skin-animation", "inbetween", "camera-movement", "audio-track", "batch-process", "auto-action"]);
+interface AdapterCapability {
+  reason: string;
+  phase: string;
+}
+
+const ADAPTER_CAPABILITIES: Readonly<Record<string, AdapterCapability>> = {
+  "select-subject": { reason: "ต้องใช้ segmentation model; ยังไม่มี AI backend ที่เปิดใช้งาน", phase: "AI Selection" },
+  "object-selection": { reason: "ต้องใช้ object detection/segmentation model; ยังไม่มี AI backend ที่เปิดใช้งาน", phase: "AI Selection" },
+  "content-aware-scale": { reason: "ยังไม่มี seam-carving engine ที่รักษาตัวแบบและผ่าน visual regression", phase: "Advanced Transform" },
+  remove: { reason: "ต้องใช้ inpainting engine; ยังไม่มี AI backend ที่เปิดใช้งาน", phase: "AI Retouch" },
+  "spot-healing": { reason: "ยังไม่มี healing sampler/texture synthesis ที่ผ่าน interaction test", phase: "Advanced Retouch" },
+  "healing-brush": { reason: "ยังไม่มี source-point healing sampler ที่ผ่าน interaction test", phase: "Advanced Retouch" },
+  patch: { reason: "ยังไม่มี patch blending engine ที่ผ่าน visual regression", phase: "Advanced Retouch" },
+  "frequency-separation": { reason: "ยังไม่มี multi-band raster pipeline สำหรับเลเยอร์ความถี่", phase: "Advanced Retouch" },
+  "3d-object": { reason: "document model ยังไม่มี 3D scene และ WebGL renderer", phase: "3D Engine" },
+  "3d-pose": { reason: "document model ยังไม่มี skeleton/pose solver และ WebGL renderer", phase: "3D Engine" },
+  "3d-camera": { reason: "document model ยังไม่มี 3D camera และ WebGL scene", phase: "3D Engine" },
+  "3d-light": { reason: "document model ยังไม่มี 3D lighting และ material pipeline", phase: "3D Engine" },
+  "pose-scanner": { reason: "ต้องใช้ pose-estimation model และ consent flow; backend ยังไม่มี", phase: "3D / AI" },
+  "hand-scanner": { reason: "ต้องใช้ hand-estimation model และ consent flow; backend ยังไม่มี", phase: "3D / AI" },
+  timeline: { reason: "project schema ยังไม่มี timeline/frame model หรือ playback engine", phase: "Animation" },
+  keyframe: { reason: "project schema ยังไม่มี animatable property tracks", phase: "Animation" },
+  cel: { reason: "project schema ยังไม่มี cel exposure model", phase: "Animation" },
+  "animation-folder": { reason: "layer stack ยังไม่มี animation-folder semantics", phase: "Animation" },
+  "onion-skin-animation": { reason: "ยังไม่มี frame timeline สำหรับคำนวณ onion skin", phase: "Animation" },
+  inbetween: { reason: "ต้องมี vector/cel interpolation engine ก่อน", phase: "Animation" },
+  "camera-movement": { reason: "ยังไม่มี animation camera track และ renderer", phase: "Animation" },
+  "audio-track": { reason: "project schema ยังไม่มี audio timeline, decoder policy และ export muxer", phase: "Animation / Audio" },
+  "batch-process": { reason: "ยังไม่มี cancellable command queue และ per-file failure report", phase: "Automation" },
+  "auto-action": { reason: "ยังไม่มี serializable command recorder และ permission boundary", phase: "Automation" },
+};
 
 const PHASE_TWO = new Set(["vector-eraser", "magic-eraser", "refer-other-layers-fill", "pattern-fill", "bezier-curve", "continuous-curve", "vector-pen", "edit-path", "node", "direct-selection", "path-selection", "add-anchor-point", "delete-anchor-point", "convert-point", "correct-line", "simplify-line", "connect-line", "pinch-vector-line", "adjust-line-width", "redraw-vector-line", "vector-magnet", "distort", "warp", "mesh-transform", "puppet-warp", "liquify", "clone-stamp", "pattern-stamp", "red-eye", "blur", "sharpen", "retouch-smudge", "dodge", "burn", "sponge", "color-wheel", "color-mixer", "gradient-map", "replace-color", "colorize", "type-on-path", "font-preview", "text-warp", "curve-ruler", "figure-ruler", "parallel-line-ruler", "parallel-curve-ruler", "multiple-curve-ruler", "radial-line-ruler", "radial-curve-ruler", "radial-line-ruler", "radial-curve-ruler", "special-ruler", "perspective-crop", "slice", "count", "note", "clipping-mask", "vector-mask", "gradient-mask", "auto-layer-select", "light-table", "onion-skin-reference", "material"]);
 const BRUSH_ENGINES = new Set(["brush", "pencil", "pen", "g-pen", "real-g-pen", "mapping-pen", "turnip-pen", "calligraphy-pen", "marker", "airbrush", "spray", "watercolor-brush", "oil-paint-brush", "gouache-brush", "pastel", "chalk", "charcoal", "crayon", "pixel-brush", "mixer-brush", "blend", "smudge", "decoration-brush", "pattern-brush", "texture-brush", "focus-line", "speed-line", "effect-line"]);
@@ -197,7 +227,8 @@ function engineFor(id: string): ToolEngine | undefined {
 }
 
 function capability(id: string, engine: ToolEngine | undefined): Pick<ToolDefinition, "capability" | "reason" | "phase"> {
-  if (ADAPTERS.has(id)) return { capability: "adapter", reason: "ต้องเชื่อม backend หรือ engine ภายนอกก่อน", phase: "AI / Cloud" };
+  const adapter = ADAPTER_CAPABILITIES[id];
+  if (adapter) return { capability: "adapter", ...adapter };
   if (engine && EXPERIMENTAL.has(id)) return { capability: "experimental", reason: "local engine ยังอยู่ระหว่างปรับความแม่นยำ", phase: "Foundation" };
   if (engine) return { capability: "ready" };
   return { capability: "disabled", reason: "มี canonical tool ID แล้ว แต่ยังไม่มี interaction จริงที่ผ่าน acceptance test", phase: PHASE_TWO.has(id) ? "Vector & Advanced" : "Foundation follow-up" };

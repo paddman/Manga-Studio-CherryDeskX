@@ -38,8 +38,8 @@ describe("production editor DOM interactions", () => {
     const selectSubject = app.querySelector<HTMLButtonElement>('[data-tool="select-subject"]');
     expect(selectSubject?.disabled).toBe(true);
     expect(selectSubject?.classList.contains("capability-adapter")).toBe(true);
-    expect(selectSubject?.title).toContain("ต้องเชื่อม backend หรือ engine ภายนอกก่อน");
-    expect(selectSubject?.title).toContain("AI / Cloud");
+    expect(selectSubject?.title).toContain("segmentation model");
+    expect(selectSubject?.title).toContain("AI Selection");
   });
 
   it("renders eight real crop handles only while the selected image is in crop mode", () => {

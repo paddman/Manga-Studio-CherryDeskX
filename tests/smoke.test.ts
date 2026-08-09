@@ -16,7 +16,14 @@ describe("editor smoke render", () => {
     expect(html).toContain("data-hierarchy-volume");
     expect(html).toContain("data-page-canvas");
     expect(html).toContain("capability-adapter");
-    expect(html).toContain("ต้องเชื่อม backend หรือ engine ภายนอกก่อน");
+    expect(html).toContain("ยังไม่มี AI backend ที่เปิดใช้งาน");
+  });
+
+  it("warns clearly when CMYK metadata is selected", () => {
+    runtime.project.colorMode = "cmyk";
+    const html = renderApp();
+    expect(html).toContain("CMYK เป็น metadata เท่านั้น");
+    expect(html).toContain("ยังเป็น RGB/sRGB");
   });
 
   it("renders a selected raster layer in the unified stack with real controls", () => {
