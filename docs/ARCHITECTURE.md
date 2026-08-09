@@ -20,7 +20,9 @@ DOM events -> editor/tools + editor/actions -> versioned RuntimeState -> Project
 - `parentId` makes an image a child of a panel. The DOM renders the image inside a clipped panel container; the Canvas exporter applies the same panel path before drawing the child.
 - Crop state is `{ x, y, scale, left, top, width, height }` on an image. Double-click enters crop mode and changes the image inside the existing panel/image frame.
 - `selectedIds` supports Shift-click and marquee selection. Snapping candidates include page edges/center and non-selected element edges/centers. Guides are transient runtime state and are never exported.
-- `MangaPage.rasterLayers` and `layerOrder` extend the existing element stack without invalidating legacy element actions. Raster strokes are replayable Canvas operations and can carry a pixel-selection shape as a clip mask.
+- `MangaPage.rasterLayers` and `layerOrder` form one low-to-high stack for editor rendering, inspector ordering and export. Panel children remain scoped to their clipping container.
+- Raster strokes are replayable Canvas operations. They support geometric pixel selections, contiguous flood fill/erase, alpha-preserving paint, optional selection masks and moving the latest stroke to a new layer.
+- Pointer interactions use pointer capture, one history checkpoint per gesture and pure coordinate/selection helpers. `DEFAULT_TOOL_KEYMAP` maps standard shortcuts and can be replaced by a typed custom map later.
 - Project schema migration normalizes legacy MVP documents to `PROJECT_SCHEMA_VERSION` 3, including raster-layer defaults, the volume/chapter hierarchy and new element defaults.
 
 ## Persistence and integration
@@ -29,4 +31,4 @@ DOM events -> editor/tools + editor/actions -> versioned RuntimeState -> Project
 
 ## Export
 
-The export pipeline rasterizes the domain page without selection boxes, guides or editor overlays. Raster layers are composited before element rendering, so export matches the editor order currently supported by the unified stack. PNG/JPG are page outputs, PDF embeds page JPEGs, CBZ/ZIP use store-only ZIP entries, Webtoon composes and splits long pages at a configurable height, and `.cherrymanga` includes versioned JSON plus asset/raster binaries for round-trip editing.
+The export pipeline walks the same unified layer order as the editor and excludes selection boxes, guides and editor overlays. PNG can omit the page background for alpha; JPG/PDF/CBZ default to white and accept a chosen background. PDF embeds page JPEGs, CBZ/ZIP use store-only ZIP entries, and Webtoon slices can split inside an oversized page without dropping pixels. `.cherrymanga` includes versioned JSON plus asset/raster binaries and validates entry paths, sizes, CRC checksums and schema compatibility on import.

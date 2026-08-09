@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createStarterProject } from "../src/sample";
 import { MemoryAssetRepository, MemoryRasterRepository } from "../src/persistence/repository";
-import { exportProjectBundle, importProjectBundle } from "../src/persistence/archive";
+import { assertSupportedProjectSchema, exportProjectBundle, importProjectBundle } from "../src/persistence/archive";
 import { migrateProject, serializeProject } from "../src/persistence/serialization";
 import { validateImageFile } from "../src/security/files";
 
@@ -28,6 +28,10 @@ describe("project persistence", () => {
     const project = createStarterProject();
     const assets = new MemoryAssetRepository();
     const firstAsset = project.assets[0]!;
+    const page = project.pages[0]!;
+    const panel = page.elements.find((element) => element.kind === "panel");
+    const childImage = page.elements.find((element) => element.kind === "image");
+    if (panel && childImage) childImage.parentId = panel.id;
     await assets.put(firstAsset.id, new Blob(["binary-image"], { type: firstAsset.mimeType }));
     const archive = await exportProjectBundle(project, assets);
     const imported = await importProjectBundle(archive);
@@ -35,6 +39,30 @@ describe("project persistence", () => {
     expect(imported.project.pages).toHaveLength(project.pages.length);
     expect(imported.assets.get(firstAsset.id)).toBeDefined();
     expect(await imported.assets.get(firstAsset.id)?.text()).toBe("binary-image");
+    const importedChild = imported.project.pages.flatMap((item) => item.elements).find((element) => element.id === childImage?.id);
+    expect(importedChild?.parentId).toBe(panel?.id);
+  });
+
+  it("rejects corrupt and future .cherrymanga files with readable errors", async () => {
+    await expect(importProjectBundle(new Blob(["not a zip"]))).rejects.toThrow("ไม่ใช่ ZIP");
+
+    const project = createStarterProject();
+    const archive = await exportProjectBundle(project, new MemoryAssetRepository());
+    const bytes = new Uint8Array(await archive.arrayBuffer());
+    const marker = new TextEncoder().encode(`\"schemaVersion\": ${project.schemaVersion}`);
+    let markerOffset = -1;
+    for (let index = 0; index <= bytes.length - marker.length; index += 1) {
+      if (marker.every((value, part) => bytes[index + part] === value)) {
+        markerOffset = index;
+        break;
+      }
+    }
+    expect(markerOffset).toBeGreaterThan(-1);
+    bytes[markerOffset + marker.length - 1] = "9".charCodeAt(0);
+    await expect(importProjectBundle(new Blob([bytes]))).rejects.toThrow("checksum");
+    expect(() => assertSupportedProjectSchema({ schemaVersion: 99, pages: [{}] })).toThrow("รองรับถึง version 3");
+    expect(() => assertSupportedProjectSchema({ schemaVersion: "3", pages: [{}] })).toThrow("schemaVersion");
+    expect(() => assertSupportedProjectSchema({ schemaVersion: 3 })).toThrow("ไม่มีหน้ามังงะ");
   });
 
   it("accepts a real PNG file without relying on its browser MIME value", async () => {
@@ -57,7 +85,8 @@ describe("project persistence", () => {
       alphaLock: false,
       blendMode: "source-over" as const,
       bitmapKey: "project/page/raster-test",
-      strokes: [{ id: "stroke-1", kind: "stroke" as const, preset: "g-pen", points: [{ x: 2, y: 3, pressure: 1 }], color: "#000", size: 5, opacity: 1, blendMode: "source-over" as const }],
+      mask: { enabled: true, inverted: false, selection: { mode: "ellipse" as const, points: [{ x: 0, y: 0, pressure: 1 }, { x: 40, y: 30, pressure: 1 }], x: 0, y: 0, width: 40, height: 30 } },
+      strokes: [{ id: "stroke-1", kind: "bucket" as const, preset: "paint-bucket", points: [{ x: 2, y: 3, pressure: 1 }], color: "#000", size: 5, opacity: 1, blendMode: "source-over" as const, preserveAlpha: true, tolerance: 18 }],
     };
     page.rasterLayers.push(layer);
     page.layerOrder.push(layer.id);
@@ -66,7 +95,11 @@ describe("project persistence", () => {
     await rasters.put(layer.bitmapKey, new Blob(["raster-png"], { type: "image/png" }));
     const archive = await exportProjectBundle(project, assets, rasters);
     const imported = await importProjectBundle(archive);
-    expect(imported.project.pages[0]?.rasterLayers[0]?.strokes[0]?.preset).toBe("g-pen");
+    expect(imported.project.pages[0]?.rasterLayers[0]?.strokes[0]?.preset).toBe("paint-bucket");
+    expect(imported.project.pages[0]?.rasterLayers[0]?.strokes[0]?.kind).toBe("bucket");
+    expect(imported.project.pages[0]?.rasterLayers[0]?.strokes[0]?.tolerance).toBe(18);
+    expect(imported.project.pages[0]?.rasterLayers[0]?.mask?.selection.mode).toBe("ellipse");
+    expect(imported.project.pages[0]?.rasterLayers[0]?.strokes[0]?.preserveAlpha).toBe(true);
     expect(await imported.rasters.get(layer.bitmapKey)?.text()).toBe("raster-png");
   });
 });
