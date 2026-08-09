@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { backgroundForExport, createPdfDocument, createStoreZip, exportScaleForMode, millimetersToPixels, pagesForScope, planWebtoonSlices, renderedPagePixelSize } from "../src/export";
 import { createStarterProject } from "../src/sample";
-import { EXPORT_WORKER_CAPABILITY, InlineExportJobRunner } from "../src/export/runner";
+import { EXPORT_WORKER_CAPABILITY, HybridWorkerExportJobRunner, InlineExportJobRunner } from "../src/export/runner";
 
 describe("export foundations", () => {
   it("applies alpha and opaque background defaults by format", () => {
@@ -55,9 +55,10 @@ describe("export foundations", () => {
     expect(print.height).toBeGreaterThan(plain.height);
   });
 
-  it("exposes an honest worker boundary while local export remains inline", () => {
+  it("exposes an honest hybrid worker boundary with an inline fallback", () => {
     expect(new InlineExportJobRunner().execution).toBe("inline");
-    expect(EXPORT_WORKER_CAPABILITY).toMatchObject({ status: "adapter" });
-    expect(EXPORT_WORKER_CAPABILITY.reason).toContain("worker-safe renderer");
+    expect(new HybridWorkerExportJobRunner().execution).toBe("hybrid-worker");
+    expect(EXPORT_WORKER_CAPABILITY).toMatchObject({ status: "experimental" });
+    expect(EXPORT_WORKER_CAPABILITY.reason).toContain("main thread");
   });
 });

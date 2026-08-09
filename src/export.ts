@@ -27,6 +27,13 @@ export interface ExportOptions {
   onProgress?: (completed: number, total: number) => void;
   includeBleed?: boolean;
   cropMarks?: boolean;
+  packagingAdapter?: ExportPackagingAdapter;
+}
+
+export interface ExportPackagingAdapter {
+  readonly execution: "inline" | "worker";
+  createZip(entries: ArchiveEntry[], signal?: AbortSignal): Promise<Blob>;
+  createPdf(pages: PdfPageInput[], signal?: AbortSignal): Promise<Blob>;
 }
 
 export interface PrintLayoutOptions {
@@ -542,7 +549,7 @@ export async function exportPagePng(page: MangaPage, filename: string, scale = 2
   downloadBlobFile(blob, `${safeFilename(filename)}.png`);
 }
 
-interface ArchiveEntry {
+export interface ArchiveEntry {
   name: string;
   data: Uint8Array;
 }
@@ -611,7 +618,15 @@ function ascii(value: string): Uint8Array {
   return new TextEncoder().encode(value);
 }
 
-export async function createPdfDocument(pages: Array<{ page: MangaPage; blob: Blob; width: number; height: number; dpi?: number }>): Promise<Blob> {
+export interface PdfPageInput {
+  page?: MangaPage;
+  blob: Blob;
+  width: number;
+  height: number;
+  dpi?: number;
+}
+
+export async function createPdfDocument(pages: PdfPageInput[]): Promise<Blob> {
   const objects: Uint8Array[] = [];
   const pageReferences: number[] = [];
   const pagesObject = 2;
@@ -697,6 +712,18 @@ export function backgroundForExport(format: ExportFormat, requested: string | nu
   if (requested !== undefined) return requested;
   return format === "jpg" || format === "pdf" || format === "cbz" ? "#ffffff" : undefined;
 }
+
+export const inlineExportPackagingAdapter: ExportPackagingAdapter = {
+  execution: "inline",
+  createZip: async (entries, signal) => {
+    if (signal?.aborted) throw new DOMException("Export cancelled", "AbortError");
+    return createStoreZip(entries);
+  },
+  createPdf: async (pages, signal) => {
+    if (signal?.aborted) throw new DOMException("Export cancelled", "AbortError");
+    return createPdfDocument(pages);
+  },
+};
 
 async function createWebtoonBlobs(pages: Array<{ page: MangaPage; blob: Blob }>, scale: number, maxHeight: number, signal?: AbortSignal): Promise<Blob[]> {
   const images = await Promise.all(pages.map(async ({ page, blob }) => {
@@ -784,6 +811,7 @@ export async function exportProject(project: MangaProject, filename: string, opt
   const pages = pagesForScope(project, options.scope ?? "page");
   if (!pages.length) throw new Error("ขอบเขตที่เลือกไม่มีหน้าสำหรับส่งออก");
   const scale = Math.max(0.25, options.scale ?? 2);
+  const packaging = options.packagingAdapter ?? inlineExportPackagingAdapter;
   const total = pages.length;
   const rendered: Array<{ page: MangaPage; blob: Blob; width: number; height: number }> = [];
   const exportBackground = backgroundForExport(options.format, options.backgroundColor);
@@ -805,7 +833,7 @@ export async function exportProject(project: MangaProject, filename: string, opt
   const base = safeFilename(filename);
   if (options.format === "png" || options.format === "jpg") {
     if (rendered.length === 1) downloadBlobFile(rendered[0]!.blob, `${base}.${options.format}`);
-    else downloadBlobFile(createStoreZip(await Promise.all(rendered.map(async ({ page, blob }, index) => ({ name: `${String(index + 1).padStart(3, "0")}-${safeFilename(page.name)}.${options.format}`, data: new Uint8Array(await blob.arrayBuffer()) })))), `${base}.zip`);
+    else downloadBlobFile(await packaging.createZip(await Promise.all(rendered.map(async ({ page, blob }, index) => ({ name: `${String(index + 1).padStart(3, "0")}-${safeFilename(page.name)}.${options.format}`, data: new Uint8Array(await blob.arrayBuffer()) }))), options.signal), `${base}.zip`);
     return;
   }
   if (options.format === "webtoon") {
@@ -819,15 +847,15 @@ export async function exportProject(project: MangaProject, filename: string, opt
     const entries = await Promise.all(blobs.map(async (blob, index) => ({ name: `${base}-${String(index + 1).padStart(2, "0")}.png`, data: new Uint8Array(await blob.arrayBuffer()) })));
     if (longStrip) entries.unshift({ name: `${base}-long.png`, data: new Uint8Array(await longStrip.arrayBuffer()) });
     else entries.unshift({ name: "README.txt", data: ascii("Long-strip PNG was omitted because it exceeded browser Canvas limits. Sliced PNG files are complete.") });
-    downloadBlobFile(createStoreZip(entries), `${base}-webtoon.zip`);
+    downloadBlobFile(await packaging.createZip(entries, options.signal), `${base}-webtoon.zip`);
     return;
   }
   if (options.format === "pdf") {
-    const pdf = await createPdfDocument(rendered.map(({ page, blob, width, height }) => ({ page, blob, width, height, dpi: project.dpi * scale })));
+    const pdf = await packaging.createPdf(rendered.map(({ page, blob, width, height }) => ({ page, blob, width, height, dpi: project.dpi * scale })), options.signal);
     downloadBlobFile(pdf, `${base}.pdf`);
     return;
   }
   const entries = await Promise.all(rendered.map(async ({ page, blob }, index) => ({ name: `pages/${String(index + 1).padStart(3, "0")}-${safeFilename(page.name)}.png`, data: new Uint8Array(await blob.arrayBuffer()) })));
   entries.unshift({ name: "project.json", data: ascii(JSON.stringify({ id: project.id, name: project.name, schemaVersion: project.schemaVersion, pageIds: pages.map((page) => page.id) }, null, 2)) });
-  downloadBlobFile(createStoreZip(entries), `${base}.${options.format}`);
+  downloadBlobFile(await packaging.createZip(entries, options.signal), `${base}.${options.format}`);
 }
