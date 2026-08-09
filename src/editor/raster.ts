@@ -1,6 +1,7 @@
 import { brushPreset } from "./tools";
 import type { MangaPage, PixelSelectionShape, RasterLayer, RasterPoint, RasterStroke } from "../types";
 import { isRasterLayer, orderedPageLayers } from "./layers";
+import { applyRetouchPixels, isLocalRetouchPreset } from "./retouch";
 
 export const MAX_RASTER_DIMENSION = 16_384;
 export const MAX_RASTER_PIXELS = 32_000_000;
@@ -426,6 +427,19 @@ function drawSpecialStroke(ctx: CanvasRenderingContext2D, stroke: RasterStroke, 
 }
 
 export function drawStroke(ctx: CanvasRenderingContext2D, stroke: RasterStroke, width: number, height: number): void {
+  if (stroke.kind === "filter") {
+    if (!isLocalRetouchPreset(stroke.preset)) return;
+    const image = ctx.getImageData(0, 0, width, height);
+    applyRetouchPixels(image.data, width, height, {
+      preset: stroke.preset,
+      points: stroke.points,
+      size: stroke.size,
+      opacity: stroke.opacity,
+      selection: stroke.selection,
+    });
+    ctx.putImageData(image, 0, 0);
+    return;
+  }
   if (stroke.kind === "bucket" || stroke.kind === "erase-fill") {
     drawSpecialStroke(ctx, stroke, width, height);
     return;
@@ -448,7 +462,7 @@ function initializeCanvas(canvas: HTMLCanvasElement, page: MangaPage): CanvasRen
 }
 
 function drawAlphaLockedStroke(ctx: CanvasRenderingContext2D, stroke: RasterStroke, width: number, height: number): void {
-  if (!stroke.preserveAlpha || stroke.blendMode === "destination-out") {
+  if (!stroke.preserveAlpha || stroke.blendMode === "destination-out" || stroke.kind === "filter") {
     drawStroke(ctx, stroke, width, height);
     return;
   }

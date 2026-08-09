@@ -20,6 +20,7 @@ export type ToolEngine =
   | "raster-bucket-erase"
   | "raster-gradient"
   | "raster-shape"
+  | "raster-retouch"
   | "element-rotate"
   | "element-flip"
   | "element-free-transform"
@@ -141,6 +142,7 @@ export const TOOL_CATALOG: readonly ToolSeed[] = [
 const EXPERIMENTAL = new Set([
   "magic-wand", "quick-selection", "magnetic-lasso", "shape-builder", "custom-shape", "gradient-tone", "stream-line", "saturated-line", "perspective-transform", "perspective-ruler", "symmetry-ruler", "sub-view", "compare-view",
   "mixer-brush", "blend", "smudge", "decoration-brush", "pattern-brush", "texture-brush", "focus-line", "speed-line", "effect-line", "background-eraser", "magic-eraser", "skew", "manga-tone", "screentone", "gradient-tone", "tone-scraping",
+  "blur", "sharpen", "dodge", "burn", "sponge", "red-eye",
 ]);
 
 const ADAPTERS = new Set(["select-subject", "object-selection", "content-aware-fill", "content-aware-scale", "remove", "spot-healing", "healing-brush", "patch", "frequency-separation", "3d-object", "3d-pose", "3d-camera", "3d-light", "pose-scanner", "hand-scanner", "timeline", "keyframe", "cel", "animation-folder", "onion-skin-animation", "inbetween", "camera-movement", "audio-track", "batch-process", "auto-action"]);
@@ -149,6 +151,7 @@ const PHASE_TWO = new Set(["vector-eraser", "magic-eraser", "refer-other-layers-
 const BRUSH_ENGINES = new Set(["brush", "pencil", "pen", "g-pen", "real-g-pen", "mapping-pen", "turnip-pen", "calligraphy-pen", "marker", "airbrush", "spray", "watercolor-brush", "oil-paint-brush", "gouache-brush", "pastel", "chalk", "charcoal", "crayon", "pixel-brush", "mixer-brush", "blend", "smudge", "decoration-brush", "pattern-brush", "texture-brush", "focus-line", "speed-line", "effect-line"]);
 const ERASER_ENGINES = new Set(["eraser", "hard-eraser", "soft-eraser", "kneaded-eraser", "tone-scraping"]);
 const SHAPE_ENGINES = new Set(["line", "polyline", "curve", "rectangle", "rounded-rectangle", "ellipse", "polygon", "star"]);
+const RETOUCH_ENGINES = new Set(["blur", "sharpen", "dodge", "burn", "sponge", "red-eye"]);
 
 function engineFor(id: string): ToolEngine | undefined {
   if (id === "select" || id === "auto-select" || id === "layer-select") return "element-select";
@@ -168,6 +171,7 @@ function engineFor(id: string): ToolEngine | undefined {
   if (id === "paint-bucket" || id === "contiguous-fill") return "raster-bucket";
   if (id === "gradient") return "raster-gradient";
   if (SHAPE_ENGINES.has(id)) return "raster-shape";
+  if (RETOUCH_ENGINES.has(id)) return "raster-retouch";
   if (id === "rotate") return "element-rotate";
   if (id === "flip") return "element-flip";
   if (id === "free-transform") return "element-free-transform";

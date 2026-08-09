@@ -15,7 +15,7 @@ export const PROJECT_SCHEMA_VERSION = 5;
 export type ToolId = string & { readonly __toolId: unique symbol };
 export type Tool = ToolId;
 
-export type RasterStrokeKind = "stroke" | "line" | "rectangle" | "ellipse" | "polygon" | "fill" | "gradient" | "bucket" | "erase-fill";
+export type RasterStrokeKind = "stroke" | "line" | "rectangle" | "ellipse" | "polygon" | "fill" | "gradient" | "bucket" | "erase-fill" | "filter";
 export type RasterBlendMode = "source-over" | "destination-out" | "multiply" | "screen" | "overlay";
 
 export interface RasterPoint {

@@ -27,6 +27,9 @@ describe("typed tool registry", () => {
     expect(TOOL_DEFINITIONS.find((tool) => tool.id === "divide-frame")?.engine).toBe("panel-split");
     expect(TOOL_DEFINITIONS.find((tool) => tool.id === "screentone")?.engine).toBe("raster-fill");
     expect(TOOL_DEFINITIONS.find((tool) => tool.id === "manga-tone")?.capability).toBe("experimental");
+    expect(TOOL_DEFINITIONS.find((tool) => tool.id === "blur")?.engine).toBe("raster-retouch");
+    expect(TOOL_DEFINITIONS.find((tool) => tool.id === "red-eye")?.capability).toBe("experimental");
+    expect(TOOL_DEFINITIONS.find((tool) => tool.id === "spot-healing")?.capability).toBe("adapter");
   });
 
   it("resolves the standard keymap and supports a typed custom keymap", () => {
