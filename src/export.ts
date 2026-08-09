@@ -546,6 +546,29 @@ async function createWebtoonBlobs(pages: Array<{ page: MangaPage; blob: Blob }>,
   return results;
 }
 
+async function createWebtoonLongStripBlob(pages: Array<{ page: MangaPage; blob: Blob }>, scale: number, signal?: AbortSignal): Promise<Blob> {
+  const images = await Promise.all(pages.map(async ({ page, blob }) => ({ page, image: await loadImage(URL.createObjectURL(blob)) })));
+  const width = Math.max(...images.map((item) => Math.round(item.page.width * scale)));
+  const height = images.reduce((total, item) => total + Math.round(item.page.height * scale), 0);
+  if (width * height > 50_000_000 || height > 32_000) throw new Error("ภาพ Webtoon ยาวเกินขนาด Canvas ของเบราว์เซอร์ ให้ใช้ sliced ZIP แทน");
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("เบราว์เซอร์ไม่รองรับ Canvas 2D");
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, width, height);
+  let y = 0;
+  for (const item of images) {
+    if (signal?.aborted) throw new DOMException("Export cancelled", "AbortError");
+    const itemWidth = Math.round(item.page.width * scale);
+    const itemHeight = Math.round(item.page.height * scale);
+    ctx.drawImage(item.image, 0, y, itemWidth, itemHeight);
+    y += itemHeight;
+  }
+  return canvasToPng(canvas, height);
+}
+
 async function canvasToPng(canvas: HTMLCanvasElement, height: number): Promise<Blob> {
   const cropped = document.createElement("canvas");
   cropped.width = canvas.width;
@@ -574,8 +597,10 @@ export async function exportProject(project: MangaProject, filename: string, opt
     return;
   }
   if (options.format === "webtoon") {
+    const longStrip = await createWebtoonLongStripBlob(rendered, scale, options.signal);
     const blobs = await createWebtoonBlobs(rendered, scale, options.maxWebtoonHeight ?? 8000, options.signal);
-    downloadBlobFile(zipStore(await Promise.all(blobs.map(async (blob, index) => ({ name: `${base}-${String(index + 1).padStart(2, "0")}.png`, data: new Uint8Array(await blob.arrayBuffer()) })))), `${base}-webtoon.zip`);
+    const entries = [{ name: `${base}-long.png`, data: new Uint8Array(await longStrip.arrayBuffer()) }, ...await Promise.all(blobs.map(async (blob, index) => ({ name: `${base}-${String(index + 1).padStart(2, "0")}.png`, data: new Uint8Array(await blob.arrayBuffer()) })))];
+    downloadBlobFile(zipStore(entries), `${base}-webtoon.zip`);
     return;
   }
   if (options.format === "pdf") {
