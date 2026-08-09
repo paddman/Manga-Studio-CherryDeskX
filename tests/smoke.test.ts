@@ -10,6 +10,9 @@ describe("editor smoke render", () => {
     const html = renderApp();
     expect(html).toContain("Cherry Manga Studio");
     expect(html).toContain("data-export-format");
+    expect(html).toContain("data-export-scope");
+    expect(html).toContain("data-export-scale-mode");
+    expect(html).toContain("data-export-include-bleed");
     expect(html).toContain("data-hierarchy-volume");
     expect(html).toContain("data-page-canvas");
     expect(html).toContain("capability-adapter");

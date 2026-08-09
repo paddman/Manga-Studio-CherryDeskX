@@ -6,12 +6,15 @@ import type {
   TextAlign,
   TextElement,
   MangaProject,
+  ExportFormat as ProjectExportFormat,
+  ExportScaleMode,
+  ExportScope as ProjectExportScope,
 } from "./types";
 import { renderRasterLayer } from "./editor/raster";
 import { isRasterLayer, orderedPageLayers } from "./editor/layers";
 
-export type ExportFormat = "png" | "jpg" | "pdf" | "cbz" | "zip" | "webtoon";
-export type ExportScope = "page" | "chapter" | "volume" | "project";
+export type ExportFormat = ProjectExportFormat;
+export type ExportScope = ProjectExportScope;
 
 export interface ExportOptions {
   format: ExportFormat;
@@ -21,6 +24,40 @@ export interface ExportOptions {
   backgroundColor?: string | null;
   signal?: AbortSignal;
   onProgress?: (completed: number, total: number) => void;
+  includeBleed?: boolean;
+  cropMarks?: boolean;
+}
+
+export interface PrintLayoutOptions {
+  bleedMm: number;
+  dpi: number;
+  includeBleed: boolean;
+  cropMarks: boolean;
+}
+
+export function exportScaleForMode(mode: ExportScaleMode, customScale: number, documentDpi: number): number {
+  if (mode === "1x") return 1;
+  if (mode === "2x") return 2;
+  if (mode === "300dpi") return Math.max(0.25, 300 / Math.max(72, documentDpi));
+  return Math.max(0.25, Math.min(8, customScale));
+}
+
+export function millimetersToPixels(millimeters: number, dpi: number): number {
+  return Math.max(0, millimeters) * Math.max(72, dpi) / 25.4;
+}
+
+function logicalRenderInsets(layout: PrintLayoutOptions | undefined): { bleed: number; marks: number; inset: number } {
+  const bleed = layout?.includeBleed ? millimetersToPixels(layout.bleedMm, layout.dpi) : 0;
+  const marks = layout?.cropMarks ? Math.max(18, layout.dpi / 10) : 0;
+  return { bleed, marks, inset: bleed + marks };
+}
+
+export function renderedPagePixelSize(page: MangaPage, scale: number, layout?: PrintLayoutOptions): { width: number; height: number } {
+  const { inset } = logicalRenderInsets(layout);
+  return {
+    width: Math.max(1, Math.round((page.width + inset * 2) * scale)),
+    height: Math.max(1, Math.round((page.height + inset * 2) * scale)),
+  };
 }
 
 function loadImage(src: string): Promise<HTMLImageElement> {
@@ -358,6 +395,7 @@ async function drawElement(ctx: CanvasRenderingContext2D, element: MangaElement,
   ctx.globalAlpha = element.opacity;
   ctx.translate(element.x + element.width / 2, element.y + element.height / 2);
   ctx.rotate((element.rotation * Math.PI) / 180);
+  ctx.transform(1, Math.tan(element.skewY * Math.PI / 180), Math.tan(element.skewX * Math.PI / 180), 1, 0, 0);
   ctx.scale(element.flipX ? -1 : 1, element.flipY ? -1 : 1);
   ctx.translate(-element.width / 2, -element.height / 2);
 
@@ -393,20 +431,61 @@ async function drawElement(ctx: CanvasRenderingContext2D, element: MangaElement,
   ctx.restore();
 }
 
-export async function renderPageBlob(page: MangaPage, scale = 2, mimeType: "image/png" | "image/jpeg" = "image/png", signal?: AbortSignal, backgroundColor: string | null | undefined = undefined): Promise<Blob> {
+function drawCropMarks(ctx: CanvasRenderingContext2D, page: MangaPage, layout: PrintLayoutOptions, inset: number): void {
+  if (!layout.cropMarks) return;
+  const bleed = layout.includeBleed ? millimetersToPixels(layout.bleedMm, layout.dpi) : 0;
+  const gap = Math.max(3, layout.dpi / 100);
+  const length = Math.max(12, layout.dpi / 18);
+  const left = inset;
+  const top = inset;
+  const right = left + page.width;
+  const bottom = top + page.height;
+  const outerLeft = left - bleed - gap;
+  const outerTop = top - bleed - gap;
+  const outerRight = right + bleed + gap;
+  const outerBottom = bottom + bleed + gap;
+  ctx.save();
+  ctx.strokeStyle = "#111111";
+  ctx.globalAlpha = 1;
+  ctx.lineWidth = Math.max(0.5, 96 / Math.max(96, layout.dpi));
+  ctx.beginPath();
+  ctx.moveTo(outerLeft - length, top); ctx.lineTo(outerLeft, top);
+  ctx.moveTo(left, outerTop - length); ctx.lineTo(left, outerTop);
+  ctx.moveTo(outerRight, top); ctx.lineTo(outerRight + length, top);
+  ctx.moveTo(right, outerTop - length); ctx.lineTo(right, outerTop);
+  ctx.moveTo(outerLeft - length, bottom); ctx.lineTo(outerLeft, bottom);
+  ctx.moveTo(left, outerBottom); ctx.lineTo(left, outerBottom + length);
+  ctx.moveTo(outerRight, bottom); ctx.lineTo(outerRight + length, bottom);
+  ctx.moveTo(right, outerBottom); ctx.lineTo(right, outerBottom + length);
+  ctx.stroke();
+  ctx.restore();
+}
+
+export async function renderPageBlob(
+  page: MangaPage,
+  scale = 2,
+  mimeType: "image/png" | "image/jpeg" = "image/png",
+  signal?: AbortSignal,
+  backgroundColor: string | null | undefined = undefined,
+  printLayout?: PrintLayoutOptions,
+): Promise<Blob> {
   const canvas = document.createElement("canvas");
-  canvas.width = Math.round(page.width * scale);
-  canvas.height = Math.round(page.height * scale);
+  const outputSize = renderedPagePixelSize(page, scale, printLayout);
+  canvas.width = outputSize.width;
+  canvas.height = outputSize.height;
   const ctx = canvas.getContext("2d");
   if (!ctx) throw new Error("เบราว์เซอร์ไม่รองรับ Canvas 2D");
 
   ctx.scale(scale, scale);
+  const { inset } = logicalRenderInsets(printLayout);
   const effectiveBackground = backgroundColor === undefined ? page.background : backgroundColor;
   if (effectiveBackground !== null) {
     ctx.fillStyle = effectiveBackground;
-    ctx.fillRect(0, 0, page.width, page.height);
+    ctx.fillRect(0, 0, outputSize.width / scale, outputSize.height / scale);
   }
 
+  ctx.save();
+  ctx.translate(inset, inset);
   for (const layer of orderedPageLayers(page)) {
     if (signal?.aborted) throw new DOMException("Export cancelled", "AbortError");
     if (isRasterLayer(layer)) {
@@ -422,6 +501,8 @@ export async function renderPageBlob(page: MangaPage, scale = 2, mimeType: "imag
     }
     if (!layer.parentId) await drawElement(ctx, layer, page);
   }
+  ctx.restore();
+  if (printLayout) drawCropMarks(ctx, page, printLayout, inset);
 
   return new Promise<Blob>((resolve, reject) => {
     canvas.toBlob((result) => {
@@ -524,7 +605,7 @@ function ascii(value: string): Uint8Array {
   return new TextEncoder().encode(value);
 }
 
-export async function createPdfDocument(pages: Array<{ page: MangaPage; blob: Blob; width: number; height: number }>): Promise<Blob> {
+export async function createPdfDocument(pages: Array<{ page: MangaPage; blob: Blob; width: number; height: number; dpi?: number }>): Promise<Blob> {
   const objects: Uint8Array[] = [];
   const pageReferences: number[] = [];
   const pagesObject = 2;
@@ -536,8 +617,9 @@ export async function createPdfDocument(pages: Array<{ page: MangaPage; blob: Bl
     const contentObject = pageObject + 1;
     const imageObject = pageObject + 2;
     pageReferences.push(pageObject);
-    const pdfWidth = Math.round(item.page.width * 72 / 96);
-    const pdfHeight = Math.round(item.page.height * 72 / 96);
+    const outputDpi = Math.max(72, item.dpi ?? 96);
+    const pdfWidth = Math.round(item.width * 72 / outputDpi);
+    const pdfHeight = Math.round(item.height * 72 / outputDpi);
     objects.push(ascii(`<< /Type /Page /Parent ${pagesObject} 0 R /MediaBox [0 0 ${pdfWidth} ${pdfHeight}] /Resources << /XObject << /Im0 ${imageObject} 0 R >> >> /Contents ${contentObject} 0 R >>`));
     const stream = `q ${pdfWidth} 0 0 ${pdfHeight} 0 0 cm /Im0 Do Q`;
     objects.push(ascii(`<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`));
@@ -560,17 +642,21 @@ export async function createPdfDocument(pages: Array<{ page: MangaPage; blob: Bl
 }
 
 export function pagesForScope(project: MangaProject, scope: ExportScope): MangaPage[] {
-  if (scope === "page") return [project.pages.find((page) => page.id === project.activePageId) ?? project.pages[0]!];
+  const byId = new Map(project.pages.map((page) => [page.id, page]));
+  const resolve = (ids: readonly string[]): MangaPage[] => ids.map((id) => byId.get(id)).filter((page): page is MangaPage => page !== undefined);
+  if (scope === "page") {
+    const active = project.pages.find((page) => page.id === project.activePageId) ?? project.pages[0];
+    return active ? [active] : [];
+  }
   if (scope === "chapter") {
     const chapter = project.chapters.find((item) => item.id === project.activeChapterId);
-    return project.pages.filter((page) => chapter?.pageIds.includes(page.id));
+    return resolve(chapter?.pageIds ?? []);
   }
   if (scope === "volume") {
     const volume = project.volumes.find((item) => item.id === project.activeVolumeId);
-    const chapterIds = new Set(volume?.chapterIds ?? []);
-    return project.pages.filter((page) => chapterIds.has(page.chapterId));
+    return (volume?.chapterIds ?? []).flatMap((chapterId) => resolve(project.chapters.find((chapter) => chapter.id === chapterId)?.pageIds ?? []));
   }
-  return [...project.pages].sort((a, b) => a.order - b.order);
+  return project.volumes.flatMap((volume) => volume.chapterIds.flatMap((chapterId) => resolve(project.chapters.find((chapter) => chapter.id === chapterId)?.pageIds ?? [])));
 }
 
 export interface WebtoonSlice {
@@ -690,14 +776,24 @@ async function canvasToPng(canvas: HTMLCanvasElement, height: number): Promise<B
 
 export async function exportProject(project: MangaProject, filename: string, options: ExportOptions): Promise<void> {
   const pages = pagesForScope(project, options.scope ?? "page");
+  if (!pages.length) throw new Error("ขอบเขตที่เลือกไม่มีหน้าสำหรับส่งออก");
   const scale = Math.max(0.25, options.scale ?? 2);
   const total = pages.length;
-  const rendered: Array<{ page: MangaPage; blob: Blob }> = [];
+  const rendered: Array<{ page: MangaPage; blob: Blob; width: number; height: number }> = [];
   const exportBackground = backgroundForExport(options.format, options.backgroundColor);
+  const printLayout: PrintLayoutOptions | undefined = options.format === "webtoon"
+    ? undefined
+    : {
+        bleedMm: project.bleed,
+        dpi: project.dpi,
+        includeBleed: options.includeBleed ?? false,
+        cropMarks: options.cropMarks ?? false,
+      };
   for (const [index, page] of pages.entries()) {
     if (options.signal?.aborted) throw new DOMException("Export cancelled", "AbortError");
-    const blob = await renderPageBlob(page, scale, options.format === "jpg" || options.format === "pdf" ? "image/jpeg" : "image/png", options.signal, exportBackground);
-    rendered.push({ page, blob });
+    const blob = await renderPageBlob(page, scale, options.format === "jpg" || options.format === "pdf" ? "image/jpeg" : "image/png", options.signal, exportBackground, printLayout);
+    const size = renderedPagePixelSize(page, scale, printLayout);
+    rendered.push({ page, blob, ...size });
     options.onProgress?.(index + 1, total);
   }
   const base = safeFilename(filename);
@@ -721,7 +817,7 @@ export async function exportProject(project: MangaProject, filename: string, opt
     return;
   }
   if (options.format === "pdf") {
-    const pdf = await createPdfDocument(rendered.map(({ page, blob }) => ({ page, blob, width: Math.round(page.width * scale), height: Math.round(page.height * scale) })));
+    const pdf = await createPdfDocument(rendered.map(({ page, blob, width, height }) => ({ page, blob, width, height, dpi: project.dpi * scale })));
     downloadBlobFile(pdf, `${base}.pdf`);
     return;
   }

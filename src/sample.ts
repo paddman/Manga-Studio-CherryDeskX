@@ -118,6 +118,8 @@ export function createPanel(
     width,
     height,
     rotation: 0,
+    skewX: 0,
+    skewY: 0,
     opacity: 1,
     locked: false,
     hidden: false,
@@ -149,6 +151,8 @@ export function createImage(
     width,
     height,
     rotation: 0,
+    skewX: 0,
+    skewY: 0,
     opacity: 1,
     locked: false,
     hidden: false,
@@ -180,6 +184,8 @@ export function createText(
     width,
     height,
     rotation: 0,
+    skewX: 0,
+    skewY: 0,
     opacity: 1,
     locked: false,
     hidden: false,
@@ -218,6 +224,8 @@ export function createBubble(
     width,
     height,
     rotation: 0,
+    skewX: 0,
+    skewY: 0,
     opacity: 1,
     locked: false,
     hidden: false,
@@ -237,6 +245,25 @@ export function createBubble(
     tailY: 114,
     tails: [{ id: uid("tail"), x: 72, y: 114 }],
   };
+}
+
+function attachContainedStarterImages(page: MangaPage): void {
+  for (const element of page.elements) {
+    if (element.kind !== "image" || element.parentId) continue;
+    const centerX = element.x + element.width / 2;
+    const centerY = element.y + element.height / 2;
+    const panel = page.elements.find((candidate) => candidate.kind === "panel"
+      && centerX >= candidate.x
+      && centerX <= candidate.x + candidate.width
+      && centerY >= candidate.y
+      && centerY <= candidate.y + candidate.height);
+    if (!panel || panel.kind !== "panel") continue;
+    element.parentId = panel.id;
+    element.x -= panel.x;
+    element.y -= panel.y;
+    panel.clipChildren = true;
+  }
+  page.layerOrder = page.elements.map((element) => element.id);
 }
 
 export function createStarterProject(): MangaProject {
@@ -307,10 +334,13 @@ export function createStarterProject(): MangaProject {
     layerOrder: [],
   };
 
+  attachContainedStarterImages(page1);
+  attachContainedStarterImages(page2);
+
   return {
     id: uid("project"),
     name: "NULL ARK — เล่ม 1",
-    schemaVersion: 3,
+    schemaVersion: 4,
     readingDirection: "rtl",
     pagePreset: "manga-b5",
     dpi: 300,

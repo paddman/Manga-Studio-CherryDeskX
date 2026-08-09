@@ -70,7 +70,7 @@ function normalizeAsset(value: unknown, index: number): MangaAsset {
   };
 }
 
-function baseElement(source: JsonRecord, kind: MangaElement["kind"], index: number): Pick<MangaElement, "id" | "kind" | "name" | "x" | "y" | "width" | "height" | "rotation" | "opacity" | "locked" | "hidden" | "lockAspect" | "flipX" | "flipY" | "parentId" | "groupId" | "readingOrder"> {
+function baseElement(source: JsonRecord, kind: MangaElement["kind"], index: number): Pick<MangaElement, "id" | "kind" | "name" | "x" | "y" | "width" | "height" | "rotation" | "skewX" | "skewY" | "opacity" | "locked" | "hidden" | "lockAspect" | "flipX" | "flipY" | "parentId" | "groupId" | "readingOrder"> {
   return {
     id: stringValue(source.id, `${kind}_migrated_${index}`),
     kind,
@@ -80,6 +80,8 @@ function baseElement(source: JsonRecord, kind: MangaElement["kind"], index: numb
     width: Math.max(10, numberValue(source.width, 100)),
     height: Math.max(10, numberValue(source.height, 100)),
     rotation: numberValue(source.rotation, 0),
+    skewX: Math.max(-75, Math.min(75, numberValue(source.skewX, 0))),
+    skewY: Math.max(-75, Math.min(75, numberValue(source.skewY, 0))),
     opacity: Math.min(1, Math.max(0, numberValue(source.opacity, 1))),
     locked: booleanValue(source.locked, false),
     hidden: booleanValue(source.hidden, false),

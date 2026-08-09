@@ -1,19 +1,17 @@
 import "./styles.css";
-import { downloadBlobFile, exportProject, type ExportFormat } from "./export";
+import { downloadBlobFile, exportScaleForMode, pagesForScope } from "./export";
+import { localExportJobRunner } from "./export/runner";
 import { exportProjectBundle, importProjectBundle } from "./persistence/archive";
 import { hydrateAssetSources } from "./persistence/serialization";
 import { renderRasterLayer } from "./editor/raster";
 import { addRasterLayer, applyPixelSelectionAsLayerMask, clearPixelSelection, clearRasterLayer, ensureRasterLayer, invertRasterLayerMask, persistRasterCanvas, recordRasterStroke, removeRasterLayerMask, selectRasterLayer, splitLastStrokeToLayer } from "./editor/raster-actions";
-import { buildPixelSelection, clientToPagePoint, isEraserToolId, isUsablePixelSelection, rasterStrokeKindForToolId, selectionModeForToolId } from "./editor/interactions";
+import { buildPixelSelection, clientToPagePoint, clientToRotatedPagePoint, isEraserToolId, isUsablePixelSelection, rasterStrokeKindForToolId, rotatedViewportSize, selectionModeForToolId } from "./editor/interactions";
 import { canUseTool, getToolDefinition, isRasterTool, resolveToolShortcut, toolId } from "./editor/tools";
 import {
   addAssetToPage,
   addBubble,
-  addPage,
   addPanel,
   addTextElement,
-  addChapter,
-  addVolume,
   applyPanelTemplate,
   alignSelected,
   clamp,
@@ -25,14 +23,12 @@ import {
   deleteSelected,
   detachSelectedImage,
   distributeSelected,
-  duplicatePage,
   duplicateSelected,
   flipSelected,
   getCropRect,
   groupSelected,
   handleUploads,
   moveLayer,
-  moveActivePage,
   pasteElements,
   removeOrphanAssets,
   resetImageEdits,
@@ -46,6 +42,21 @@ import {
   toggleSelectedLock,
   ungroupSelected,
 } from "./editor/actions";
+import {
+  addProjectChapter,
+  addProjectPage,
+  addProjectVolume,
+  activateProjectChapter,
+  activateProjectPage,
+  activateProjectVolume,
+  duplicateProjectChapter,
+  duplicateProjectPage,
+  duplicateProjectVolume,
+  moveProjectPage,
+  reorderProjectChapters,
+  reorderProjectPages,
+  reorderProjectVolumes,
+} from "./editor/hierarchy";
 import {
   activePage,
   checkpoint,
@@ -61,12 +72,16 @@ import {
   undoProject,
 } from "./editor/state";
 import { renderApp } from "./editor/view";
-import type { BubbleVariant, ImageElement, LeftTab, MangaElement, PixelSelectionShape, RasterPoint, RasterStroke, TextAlign, Tool } from "./types";
+import { applyPagePreset, setDocumentMetadata, type DocumentMetadataProperty } from "./editor/document";
+import { geometryBounds, rotateGeometries, scaleGeometries } from "./editor/transforms";
+import type { BubbleVariant, ExportFormat, ExportScaleMode, ExportScope, ImageElement, LeftTab, MangaElement, PagePreset, PixelSelectionShape, RasterPoint, RasterStroke, TextAlign, Tool } from "./types";
 
 const root = document.querySelector<HTMLDivElement>("#app");
 if (!root) throw new Error("Missing #app root");
 const appRoot: HTMLDivElement = root;
 let toastTimer: number | undefined;
+let hierarchyDrag: { kind: "volume" | "chapter" | "page"; id: string } | null = null;
+let exportAbortController: AbortController | null = null;
 
 function render(): void {
   appRoot.innerHTML = renderApp();
@@ -123,8 +138,8 @@ interface DragItem {
 
 interface DragContext {
   items: DragItem[];
-  startClientX: number;
-  startClientY: number;
+  startPageX: number;
+  startPageY: number;
 }
 
 function capturePointer(event: PointerEvent): () => void {
@@ -148,6 +163,41 @@ function pagePosition(element: MangaElement): { x: number; y: number } {
   if (!element.parentId) return { x: element.x, y: element.y };
   const parent = activePage().elements.find((candidate) => candidate.id === element.parentId);
   return parent ? { x: parent.x + element.x, y: parent.y + element.y } : { x: element.x, y: element.y };
+}
+
+function setPagePosition(element: MangaElement, x: number, y: number): void {
+  if (!element.parentId) {
+    element.x = x;
+    element.y = y;
+    return;
+  }
+  const parent = activePage().elements.find((candidate) => candidate.id === element.parentId);
+  element.x = parent ? x - parent.x : x;
+  element.y = parent ? y - parent.y : y;
+}
+
+function selectedTransformRoots(): MangaElement[] {
+  const selected = selectedElements().filter((element) => !element.locked);
+  const selectedIds = new Set(selected.map((element) => element.id));
+  return selected.filter((element) => !element.parentId || !selectedIds.has(element.parentId));
+}
+
+function selectedResizeTargets(roots: readonly MangaElement[]): MangaElement[] {
+  const ids = new Set(roots.map((element) => element.id));
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const element of activePage().elements) {
+      if (!element.parentId || !ids.has(element.parentId) || ids.has(element.id)) continue;
+      ids.add(element.id);
+      changed = true;
+    }
+  }
+  return activePage().elements.filter((element) => ids.has(element.id) && !element.locked);
+}
+
+function elementTransformStyle(element: MangaElement): string {
+  return `rotate(${element.rotation}deg) skew(${element.skewX}deg,${element.skewY}deg) scale(${element.flipX ? -1 : 1},${element.flipY ? -1 : 1})`;
 }
 
 function moveByPageDelta(element: MangaElement, dx: number, dy: number): void {
@@ -206,14 +256,16 @@ function snapDraggedItems(items: DragItem[]): void {
 }
 
 function beginMove(event: PointerEvent, element: MangaElement, node: HTMLElement): void {
-  if (element.locked || runtime.preferences.tool !== "select") return;
+  const tool = runtime.preferences.tool as string;
+  if (element.locked || (tool !== "select" && tool !== "free-transform")) return;
   if (runtime.preferences.cropElementId === element.id && element.kind === "image") {
     beginCropMove(event, element, node);
     return;
   }
-  const elements = selectedElements().filter((candidate) => !candidate.locked);
+  const elements = selectedTransformRoots();
   const releasePointer = capturePointer(event);
   checkpoint();
+  const startPoint = pagePoint(event);
   const context: DragContext = {
     items: elements.map((candidate) => ({
       element: candidate,
@@ -223,13 +275,14 @@ function beginMove(event: PointerEvent, element: MangaElement, node: HTMLElement
       startWidth: candidate.width,
       startHeight: candidate.height,
     })),
-    startClientX: event.clientX,
-    startClientY: event.clientY,
+    startPageX: startPoint.x,
+    startPageY: startPoint.y,
   };
 
   const move = (moveEvent: PointerEvent): void => {
-    const dx = (moveEvent.clientX - context.startClientX) / runtime.preferences.zoom;
-    const dy = (moveEvent.clientY - context.startClientY) / runtime.preferences.zoom;
+    const currentPoint = pagePoint(moveEvent);
+    const dx = currentPoint.x - context.startPageX;
+    const dy = currentPoint.y - context.startPageY;
     const page = activePage();
     context.items.forEach((item) => {
       const parent = item.element.parentId ? page.elements.find((candidate) => candidate.id === item.element.parentId) : null;
@@ -273,14 +326,15 @@ function beginMove(event: PointerEvent, element: MangaElement, node: HTMLElement
   window.addEventListener("pointerup", end, { once: true });
 }
 
-function beginCropMove(event: PointerEvent, element: ImageElement, node: HTMLElement): void {
+function beginCropMove(event: PointerEvent, element: ImageElement, _node: HTMLElement): void {
   const releasePointer = capturePointer(event);
   checkpoint();
   const start = getCropRect(element);
-  const nodeRect = node.getBoundingClientRect();
+  const startPointer = pagePoint(event);
   const move = (moveEvent: PointerEvent): void => {
-    const dx = (moveEvent.clientX - event.clientX) / Math.max(1, nodeRect.width);
-    const dy = (moveEvent.clientY - event.clientY) / Math.max(1, nodeRect.height);
+    const currentPointer = pagePoint(moveEvent);
+    const dx = (currentPointer.x - startPointer.x) / Math.max(1, element.width);
+    const dy = (currentPointer.y - startPointer.y) / Math.max(1, element.height);
     setCropRect(element, { ...start, left: start.left + dx, top: start.top + dy });
   };
   const end = (): void => {
@@ -293,16 +347,17 @@ function beginCropMove(event: PointerEvent, element: ImageElement, node: HTMLEle
   window.addEventListener("pointerup", end, { once: true });
 }
 
-function beginCropResize(event: PointerEvent, element: ImageElement, node: HTMLElement, handle: string): void {
+function beginCropResize(event: PointerEvent, element: ImageElement, _node: HTMLElement, handle: string): void {
   const releasePointer = capturePointer(event);
   checkpoint();
   const start = getCropRect(element);
-  const nodeRect = node.getBoundingClientRect();
+  const startPointer = pagePoint(event);
   const startRight = start.left + start.width;
   const startBottom = start.top + start.height;
   const move = (moveEvent: PointerEvent): void => {
-    const dx = (moveEvent.clientX - event.clientX) / Math.max(1, nodeRect.width);
-    const dy = (moveEvent.clientY - event.clientY) / Math.max(1, nodeRect.height);
+    const currentPointer = pagePoint(moveEvent);
+    const dx = (currentPointer.x - startPointer.x) / Math.max(1, element.width);
+    const dy = (currentPointer.y - startPointer.y) / Math.max(1, element.height);
     let left = start.left;
     let top = start.top;
     let right = startRight;
@@ -327,59 +382,82 @@ function beginResize(event: PointerEvent, element: MangaElement, node: HTMLEleme
   if (element.locked) return;
   const releasePointer = capturePointer(event);
   checkpoint();
-  const context = {
-    element,
-    node,
-    startClientX: event.clientX,
-    startClientY: event.clientY,
-    startX: element.x,
-    startY: element.y,
-    startWidth: element.width,
-    startHeight: element.height,
-  };
-  const ratio = context.startWidth / context.startHeight;
+  const roots = selectedTransformRoots();
+  const selectedRoots = roots.some((candidate) => candidate.id === element.id) ? roots : [element];
+  const rootBoxes = selectedRoots.map((candidate) => {
+    const position = pagePosition(candidate);
+    return { id: candidate.id, x: position.x, y: position.y, width: candidate.width, height: candidate.height, rotation: candidate.rotation };
+  });
+  const bounds = geometryBounds(rootBoxes)!;
+  const targets = selectedResizeTargets(selectedRoots).map((candidate) => {
+    const position = pagePosition(candidate);
+    return {
+      element: candidate,
+      node: document.querySelector<HTMLElement>(`[data-element-id="${CSS.escape(candidate.id)}"]`) ?? node,
+      pageX: position.x,
+      pageY: position.y,
+      width: candidate.width,
+      height: candidate.height,
+    };
+  });
+  const ratio = bounds.width / bounds.height;
+  const startPointer = pagePoint(event);
 
   const move = (moveEvent: PointerEvent): void => {
-    const dx = (moveEvent.clientX - context.startClientX) / runtime.preferences.zoom;
-    const dy = (moveEvent.clientY - context.startClientY) / runtime.preferences.zoom;
-    let x = context.startX;
-    let y = context.startY;
-    let width = context.startWidth;
-    let height = context.startHeight;
+    const currentPointer = pagePoint(moveEvent);
+    const dx = currentPointer.x - startPointer.x;
+    const dy = currentPointer.y - startPointer.y;
+    let x = bounds.x;
+    let y = bounds.y;
+    let width = bounds.width;
+    let height = bounds.height;
 
-    if (handle.includes("e")) width = context.startWidth + dx;
-    if (handle.includes("s")) height = context.startHeight + dy;
+    if (handle.includes("e")) width = bounds.width + dx;
+    if (handle.includes("s")) height = bounds.height + dy;
     if (handle.includes("w")) {
-      width = context.startWidth - dx;
-      x = context.startX + dx;
+      width = bounds.width - dx;
+      x = bounds.x + dx;
     }
     if (handle.includes("n")) {
-      height = context.startHeight - dy;
-      y = context.startY + dy;
+      height = bounds.height - dy;
+      y = bounds.y + dy;
     }
 
-    if ((element.lockAspect || moveEvent.shiftKey) && handle.length === 2) {
+    if ((selectedRoots.some((candidate) => candidate.lockAspect) || moveEvent.shiftKey) && handle.length === 2) {
       if (Math.abs(dx) > Math.abs(dy)) height = width / ratio;
       else width = height * ratio;
-      if (handle.includes("w")) x = context.startX + context.startWidth - width;
-      if (handle.includes("n")) y = context.startY + context.startHeight - height;
+      if (handle.includes("w")) x = bounds.x + bounds.width - width;
+      if (handle.includes("n")) y = bounds.y + bounds.height - height;
     }
 
-    if (width < 20) {
-      if (handle.includes("w")) x -= 20 - width;
-      width = 20;
+    if (width < 24) {
+      if (handle.includes("w")) x -= 24 - width;
+      width = 24;
     }
-    if (height < 20) {
-      if (handle.includes("n")) y -= 20 - height;
-      height = 20;
+    if (height < 24) {
+      if (handle.includes("n")) y -= 24 - height;
+      height = 24;
     }
 
-    Object.assign(element, { x, y, width, height });
-    Object.assign(node.style, {
-      left: `${x}px`,
-      top: `${y}px`,
-      width: `${width}px`,
-      height: `${height}px`,
+    const scaled = scaleGeometries(
+      targets.map((item) => ({ id: item.element.id, x: item.pageX, y: item.pageY, width: item.width, height: item.height, rotation: item.element.rotation })),
+      bounds,
+      { x, y, width, height },
+    );
+    const scaledById = new Map(scaled.map((geometry) => [geometry.id, geometry]));
+    const nextValues = targets.map((item) => ({ item, geometry: scaledById.get(item.element.id)! }))
+      .sort((a, b) => Number(Boolean(a.item.element.parentId)) - Number(Boolean(b.item.element.parentId)));
+    nextValues.forEach(({ item, geometry }) => {
+      const { x: nextX, y: nextY, width: nextWidth, height: nextHeight } = geometry;
+      setPagePosition(item.element, nextX, nextY);
+      item.element.width = nextWidth;
+      item.element.height = nextHeight;
+      Object.assign(item.node.style, {
+        left: `${item.element.x}px`,
+        top: `${item.element.y}px`,
+        width: `${nextWidth}px`,
+        height: `${nextHeight}px`,
+      });
     });
   };
 
@@ -397,18 +475,49 @@ function beginRotate(event: PointerEvent, element: MangaElement, node: HTMLEleme
   if (element.locked) return;
   const releasePointer = capturePointer(event);
   checkpoint();
-  const rect = node.getBoundingClientRect();
-  const centerX = rect.left + rect.width / 2;
-  const centerY = rect.top + rect.height / 2;
+  const roots = selectedTransformRoots();
+  const selectedRoots = roots.some((candidate) => candidate.id === element.id) ? roots : [element];
+  const items = selectedRoots.map((candidate) => {
+    const position = pagePosition(candidate);
+    return {
+      element: candidate,
+      node: document.querySelector<HTMLElement>(`[data-element-id="${CSS.escape(candidate.id)}"]`) ?? node,
+      x: position.x,
+      y: position.y,
+      rotation: candidate.rotation,
+    };
+  });
+  const bounds = geometryBounds(items.map((item) => ({ id: item.element.id, x: item.x, y: item.y, width: item.element.width, height: item.element.height, rotation: item.rotation })))!;
+  const centerPageX = bounds.x + bounds.width / 2;
+  const centerPageY = bounds.y + bounds.height / 2;
+  const canvas = document.querySelector<HTMLElement>("[data-page-canvas]");
+  const canvasRect = canvas?.getBoundingClientRect();
+  const canvasRadians = runtime.preferences.canvasRotation * Math.PI / 180;
+  const canvasDx = centerPageX - activePage().width / 2;
+  const canvasDy = centerPageY - activePage().height / 2;
+  const centerX = canvasRect ? canvasRect.left + canvasRect.width / 2 + (canvasDx * Math.cos(canvasRadians) - canvasDy * Math.sin(canvasRadians)) * runtime.preferences.zoom : node.getBoundingClientRect().left + node.getBoundingClientRect().width / 2;
+  const centerY = canvasRect ? canvasRect.top + canvasRect.height / 2 + (canvasDx * Math.sin(canvasRadians) + canvasDy * Math.cos(canvasRadians)) * runtime.preferences.zoom : node.getBoundingClientRect().top + node.getBoundingClientRect().height / 2;
   const startAngle = Math.atan2(event.clientY - centerY, event.clientX - centerX);
-  const startRotation = element.rotation;
 
   const move = (moveEvent: PointerEvent): void => {
     const angle = Math.atan2(moveEvent.clientY - centerY, moveEvent.clientX - centerX);
-    let degrees = startRotation + ((angle - startAngle) * 180) / Math.PI;
-    if (moveEvent.shiftKey) degrees = Math.round(degrees / 15) * 15;
-    element.rotation = degrees;
-    node.style.transform = `rotate(${degrees}deg)`;
+    let deltaDegrees = ((angle - startAngle) * 180) / Math.PI;
+    if (moveEvent.shiftKey) deltaDegrees = Math.round(deltaDegrees / 15) * 15;
+    const rotated = rotateGeometries(
+      items.map((item) => ({ id: item.element.id, x: item.x, y: item.y, width: item.element.width, height: item.element.height, rotation: item.rotation })),
+      { x: centerPageX, y: centerPageY },
+      deltaDegrees,
+    );
+    const rotatedById = new Map(rotated.map((geometry) => [geometry.id, geometry]));
+    items.forEach((item) => {
+      const geometry = rotatedById.get(item.element.id);
+      if (!geometry) return;
+      setPagePosition(item.element, geometry.x, geometry.y);
+      item.element.rotation = geometry.rotation;
+      item.node.style.left = `${item.element.x}px`;
+      item.node.style.top = `${item.element.y}px`;
+      item.node.style.transform = elementTransformStyle(item.element);
+    });
   };
 
   const end = (): void => {
@@ -441,18 +550,56 @@ function beginPan(event: PointerEvent): void {
   window.addEventListener("pointerup", end, { once: true });
 }
 
+function beginCanvasRotation(event: PointerEvent): void {
+  const releasePointer = capturePointer(event);
+  const startX = event.clientX;
+  const startRotation = runtime.preferences.canvasRotation;
+  const canvas = document.querySelector<HTMLElement>("[data-page-canvas]");
+  const sizer = canvas?.closest<HTMLElement>(".canvas-sizer");
+  const move = (moveEvent: PointerEvent): void => {
+    let rotation = startRotation + (moveEvent.clientX - startX) * 0.35;
+    if (moveEvent.shiftKey) rotation = Math.round(rotation / 15) * 15;
+    runtime.preferences.canvasRotation = clamp(rotation, -180, 180);
+    if (canvas) canvas.style.transform = `translate(-50%,-50%) rotate(${runtime.preferences.canvasRotation}deg) scale(${runtime.preferences.zoom})`;
+    if (sizer) {
+      const size = rotatedViewportSize(activePage().width, activePage().height, runtime.preferences.zoom, runtime.preferences.canvasRotation);
+      sizer.style.width = `${Math.ceil(size.width)}px`;
+      sizer.style.height = `${Math.ceil(size.height)}px`;
+    }
+  };
+  const end = (): void => {
+    window.removeEventListener("pointermove", move);
+    releasePointer();
+    savePreferences();
+    render();
+  };
+  window.addEventListener("pointermove", move);
+  window.addEventListener("pointerup", end, { once: true });
+}
+
+function moveNavigatorTo(event: PointerEvent, map: HTMLElement): void {
+  const viewport = document.querySelector<HTMLElement>("[data-stage-viewport]");
+  if (!viewport) return;
+  const rect = map.getBoundingClientRect();
+  const ratioX = clamp((event.clientX - rect.left) / Math.max(1, rect.width), 0, 1);
+  const ratioY = clamp((event.clientY - rect.top) / Math.max(1, rect.height), 0, 1);
+  viewport.scrollLeft = ratioX * viewport.scrollWidth - viewport.clientWidth / 2;
+  viewport.scrollTop = ratioY * viewport.scrollHeight - viewport.clientHeight / 2;
+}
+
 function beginSelectionRectangle(event: PointerEvent): void {
   const canvas = document.querySelector<HTMLElement>("[data-page-canvas]");
   if (!canvas) return;
   const releasePointer = capturePointer(event);
-  const rect = canvas.getBoundingClientRect();
-  const startX = clamp((event.clientX - rect.left) / runtime.preferences.zoom, 0, activePage().width);
-  const startY = clamp((event.clientY - rect.top) / runtime.preferences.zoom, 0, activePage().height);
+  const startPoint = pagePoint(event);
+  const startX = startPoint.x;
+  const startY = startPoint.y;
   runtime.selectionRectangle = { x: startX, y: startY, width: 0, height: 0 };
   render();
   const update = (moveEvent: PointerEvent): void => {
-    const currentX = clamp((moveEvent.clientX - rect.left) / runtime.preferences.zoom, 0, activePage().width);
-    const currentY = clamp((moveEvent.clientY - rect.top) / runtime.preferences.zoom, 0, activePage().height);
+    const currentPoint = pagePoint(moveEvent);
+    const currentX = currentPoint.x;
+    const currentY = currentPoint.y;
     runtime.selectionRectangle = {
       x: Math.min(startX, currentX),
       y: Math.min(startY, currentY),
@@ -493,7 +640,10 @@ function pagePoint(event: PointerEvent): RasterPoint {
   const canvas = document.querySelector<HTMLElement>("[data-page-canvas]");
   const page = activePage();
   if (!canvas) return { x: 0, y: 0, pressure: event.pressure || 1 };
-  return clientToPagePoint(event, canvas.getBoundingClientRect(), page);
+  const bounds = canvas.getBoundingClientRect();
+  return Math.abs(runtime.preferences.canvasRotation) < 0.001
+    ? clientToPagePoint(event, bounds, page)
+    : clientToRotatedPagePoint(event, bounds, page, runtime.preferences.canvasRotation);
 }
 
 function selectionModeForTool(tool: Tool): PixelSelectionShape["mode"] | null {
@@ -663,6 +813,16 @@ function applyCanvasTool(event: PointerEvent, tool: Tool): boolean {
     }
     return true;
   }
+  if (id === "skew") {
+    const elements = selectedElements();
+    if (elements.length) {
+      transact(() => elements.forEach((element) => {
+        element.skewX = clamp(element.skewX + (event.shiftKey ? -5 : 5), -75, 75);
+      }));
+      render();
+    }
+    return true;
+  }
   if (id === "eyedropper" || id === "color-picker" || id === "color-sampler") {
     const point = pagePoint(event);
     const canvases = [...document.querySelectorAll<HTMLCanvasElement>("[data-raster-layer-id]")].reverse();
@@ -678,26 +838,45 @@ function applyCanvasTool(event: PointerEvent, tool: Tool): boolean {
 }
 
 async function exportCurrentPage(): Promise<void> {
-  const button = document.querySelector<HTMLButtonElement>("[data-action='export']");
-  if (button) {
-    button.disabled = true;
-    button.textContent = "กำลังส่งออก…";
-  }
+  if (exportAbortController) return;
+  const format = runtime.preferences.exportFormat;
+  const scope = runtime.preferences.exportScope;
+  const pages = pagesForScope(runtime.project, scope);
+  exportAbortController = new AbortController();
+  runtime.exportTask = { status: "running", completed: 0, total: pages.length, label: `กำลังสร้าง ${format.toUpperCase()}` };
+  render();
+  let outcome: { message: string; tone: "default" | "success" | "danger" } = { message: "ส่งออกไม่สำเร็จ", tone: "danger" };
   try {
-    const select = document.querySelector<HTMLSelectElement>("[data-export-format]");
-    const format = (select?.value ?? "png") as ExportFormat;
-    const scope = format === "zip" ? "project" : format === "pdf" || format === "cbz" || format === "webtoon" ? "chapter" : "page";
     const backgroundColor = format === "png" && runtime.preferences.exportTransparent
       ? null
       : format === "jpg" || format === "pdf" || format === "cbz"
         ? runtime.preferences.exportBackgroundColor
         : undefined;
-    await exportProject(runtime.project, runtime.project.name, { format, scope, scale: 2, backgroundColor });
-    showToast(`ส่งออก ${format.toUpperCase()} แล้ว`, "success");
+    const scale = exportScaleForMode(runtime.preferences.exportScaleMode, runtime.preferences.exportCustomScale, runtime.project.dpi);
+    await localExportJobRunner.run(runtime.project, runtime.project.name, {
+      format,
+      scope,
+      scale,
+      backgroundColor,
+      maxWebtoonHeight: runtime.preferences.exportMaxWebtoonHeight,
+      includeBleed: runtime.preferences.exportIncludeBleed,
+      cropMarks: runtime.preferences.exportCropMarks,
+      signal: exportAbortController.signal,
+      onProgress: (completed, total) => {
+        runtime.exportTask = { ...runtime.exportTask, completed, total };
+        render();
+      },
+    });
+    outcome = { message: `ส่งออก ${format.toUpperCase()} แล้ว`, tone: "success" };
   } catch (error) {
-    showToast(error instanceof Error ? error.message : "ส่งออกไม่สำเร็จ", "danger");
+    outcome = error instanceof DOMException && error.name === "AbortError"
+      ? { message: "ยกเลิกการส่งออกแล้ว", tone: "default" }
+      : { message: error instanceof Error ? error.message : "ส่งออกไม่สำเร็จ", tone: "danger" };
   } finally {
+    exportAbortController = null;
+    runtime.exportTask = { status: "idle", completed: 0, total: 0, label: "" };
     render();
+    showToast(outcome.message, outcome.tone);
   }
 }
 
@@ -773,7 +952,20 @@ async function handleAction(action: string): Promise<void> {
     render();
     return;
   }
+  if (action === "reset-canvas-view") {
+    runtime.preferences.zoom = 0.62;
+    runtime.preferences.canvasRotation = 0;
+    savePreferences();
+    render();
+    return;
+  }
   if (action === "export") return exportCurrentPage();
+  if (action === "cancel-export") {
+    exportAbortController?.abort();
+    runtime.exportTask = { ...runtime.exportTask, status: "cancelled" };
+    showToast("กำลังยกเลิกการส่งออก…", "default");
+    return;
+  }
   if (action === "export-project") return exportProjectFile();
   if (action === "import-project") {
     importProjectFile();
@@ -824,10 +1016,10 @@ async function handleAction(action: string): Promise<void> {
   if (action === "toggle-lock") return runMutation(toggleSelectedLock, "เปลี่ยนสถานะล็อกแล้ว");
   if (action === "bring-forward") return runMutation(() => moveLayer(1), "เลื่อนเลเยอร์ขึ้นแล้ว");
   if (action === "send-backward") return runMutation(() => moveLayer(-1), "เลื่อนเลเยอร์ลงแล้ว");
-  if (action === "add-page") return runMutation(addPage, "เพิ่มหน้าใหม่แล้ว");
-  if (action === "duplicate-page") return runMutation(duplicatePage, "ทำสำเนาหน้าแล้ว");
+  if (action === "add-page") return runMutation(addProjectPage, "เพิ่มหน้าใหม่แล้ว");
+  if (action === "duplicate-page") return runMutation(duplicateProjectPage, "ทำสำเนาหน้าแล้ว");
   if (action === "delete-page") return runMutation(deletePage, "ลบหน้าแล้ว");
-  if (action === "move-page-back" || action === "move-page-forward") return runMutation(() => moveActivePage(action === "move-page-back" ? -1 : 1), "เรียงหน้าแล้ว");
+  if (action === "move-page-back" || action === "move-page-forward") return runMutation(() => moveProjectPage(action === "move-page-back" ? -1 : 1), "เรียงหน้าแล้ว");
   if (action === "delete-volume") {
     if (window.confirm("ลบเล่มนี้และหน้าทั้งหมดในเล่มหรือไม่? สามารถกดย้อนกลับได้")) return runMutation(deleteActiveVolume, "ลบเล่มแล้ว");
     return;
@@ -837,8 +1029,10 @@ async function handleAction(action: string): Promise<void> {
     return;
   }
   if (action === "smart-layout") return runMutation(smartLayout, "Smart Layout จัดหน้าให้แล้ว");
-  if (action === "add-volume") return runMutation(addVolume, "เพิ่มเล่มแล้ว");
-  if (action === "add-chapter") return runMutation(addChapter, "เพิ่มบทแล้ว");
+  if (action === "add-volume") return runMutation(addProjectVolume, "เพิ่มเล่มพร้อมหน้าแรกแล้ว");
+  if (action === "add-chapter") return runMutation(addProjectChapter, "เพิ่มบทพร้อมหน้าแรกแล้ว");
+  if (action === "duplicate-volume") return runMutation(duplicateProjectVolume, "ทำสำเนาเล่มแล้ว");
+  if (action === "duplicate-chapter") return runMutation(duplicateProjectChapter, "ทำสำเนาบทแล้ว");
   if (action === "align-left" || action === "align-center" || action === "align-right" || action === "align-top" || action === "align-middle" || action === "align-bottom") {
     return runMutation(() => alignSelected(action.replace("align-", "") as "left" | "center" | "right" | "top" | "middle" | "bottom"), "จัดแนวแล้ว");
   }
@@ -914,6 +1108,13 @@ appRoot.addEventListener("click", (event) => {
       document.querySelector<HTMLInputElement>("[data-upload-input]")?.click();
       return;
     }
+    if (tool === toolId("navigator")) {
+      runtime.preferences.showNavigator = !runtime.preferences.showNavigator;
+      runtime.preferences.tool = toolId("select");
+      savePreferences();
+      render();
+      return;
+    }
     if (tool === toolId("alpha-lock")) {
       const layer = activePage().rasterLayers.find((candidate) => candidate.id === runtime.preferences.activeRasterLayerId || candidate.id === runtime.selectedId);
       if (!layer) {
@@ -951,13 +1152,23 @@ appRoot.addEventListener("click", (event) => {
 
   const pageId = target.closest<HTMLElement>("[data-page-id]")?.dataset.pageId;
   if (pageId) {
-    runtime.project.activePageId = pageId;
-    const page = runtime.project.pages.find((item) => item.id === pageId);
-    if (page) {
-      runtime.project.activeVolumeId = page.volumeId;
-      runtime.project.activeChapterId = page.chapterId;
-    }
-    setSelection([]);
+    activateProjectPage(pageId);
+    persistProject();
+    render();
+    return;
+  }
+
+  const volumeId = target.closest<HTMLElement>("[data-hierarchy-select-volume]")?.dataset.hierarchySelectVolume;
+  if (volumeId) {
+    activateProjectVolume(volumeId);
+    persistProject();
+    render();
+    return;
+  }
+
+  const chapterId = target.closest<HTMLElement>("[data-hierarchy-select-chapter]")?.dataset.hierarchySelectChapter;
+  if (chapterId) {
+    activateProjectChapter(chapterId);
     persistProject();
     render();
     return;
@@ -1051,10 +1262,75 @@ appRoot.addEventListener("change", (event) => {
     return;
   }
 
+  if (target.matches("[data-export-format]")) {
+    const format = target.value as ExportFormat;
+    if (["png", "jpg", "pdf", "cbz", "zip", "webtoon"].includes(format)) runtime.preferences.exportFormat = format;
+    savePreferences();
+    render();
+    return;
+  }
+
+  if (target.matches("[data-export-scope]")) {
+    const scope = target.value as ExportScope;
+    if (["page", "chapter", "volume", "project"].includes(scope)) runtime.preferences.exportScope = scope;
+    savePreferences();
+    render();
+    return;
+  }
+
+  if (target.matches("[data-export-scale-mode]")) {
+    const mode = target.value as ExportScaleMode;
+    if (["1x", "2x", "300dpi", "custom"].includes(mode)) runtime.preferences.exportScaleMode = mode;
+    savePreferences();
+    render();
+    return;
+  }
+
+  if (target.matches("[data-export-custom-scale]")) {
+    runtime.preferences.exportCustomScale = clamp(Number(target.value), 0.25, 8);
+    savePreferences();
+    render();
+    return;
+  }
+
+  if (target.matches("[data-export-max-height]")) {
+    runtime.preferences.exportMaxWebtoonHeight = Math.round(clamp(Number(target.value), 1000, 32000));
+    savePreferences();
+    render();
+    return;
+  }
+
+  if (target.matches("[data-export-include-bleed]")) {
+    runtime.preferences.exportIncludeBleed = (target as HTMLInputElement).checked;
+    savePreferences();
+    render();
+    return;
+  }
+
+  if (target.matches("[data-export-crop-marks]")) {
+    runtime.preferences.exportCropMarks = (target as HTMLInputElement).checked;
+    savePreferences();
+    render();
+    return;
+  }
+
   if (target.matches("[data-export-background]")) {
     runtime.preferences.exportBackgroundColor = target.value;
     savePreferences();
     render();
+    return;
+  }
+
+  if (target.matches("[data-page-preset]")) {
+    if (applyPagePreset(target.value as PagePreset)) rerender("เปลี่ยน Page preset และปรับสัดส่วนเนื้อหาแล้ว");
+    else showToast("Page preset ไม่ถูกต้อง", "danger");
+    return;
+  }
+
+  const documentProperty = target.dataset.documentProp as DocumentMetadataProperty | undefined;
+  if (documentProperty) {
+    if (setDocumentMetadata(documentProperty, target.value)) render();
+    else showToast("ค่าตั้งค่าเอกสารไม่ถูกต้อง", "danger");
     return;
   }
 
@@ -1067,22 +1343,14 @@ appRoot.addEventListener("change", (event) => {
   }
 
   if (target.matches("[data-hierarchy-volume]")) {
-    runtime.project.activeVolumeId = target.value;
-    const chapter = runtime.project.chapters.find((item) => item.volumeId === target.value);
-    if (chapter) runtime.project.activeChapterId = chapter.id;
+    activateProjectVolume(target.value);
     persistProject();
     render();
     return;
   }
 
   if (target.matches("[data-hierarchy-chapter]")) {
-    runtime.project.activeChapterId = target.value;
-    const chapter = runtime.project.chapters.find((item) => item.id === target.value);
-    const pageId = chapter?.pageIds[0];
-    if (chapter && pageId) {
-      runtime.project.activeVolumeId = chapter.volumeId;
-      runtime.project.activePageId = pageId;
-    }
+    activateProjectChapter(target.value);
     persistProject();
     render();
     return;
@@ -1120,9 +1388,58 @@ appRoot.addEventListener("change", (event) => {
   }
 });
 
+appRoot.addEventListener("dragstart", (event) => {
+  if (!(event instanceof DragEvent)) return;
+  const row = (event.target as HTMLElement).closest<HTMLElement>("[data-hierarchy-drag-kind][data-hierarchy-drag-id]");
+  const kind = row?.dataset.hierarchyDragKind;
+  const id = row?.dataset.hierarchyDragId;
+  if (!row || !id || (kind !== "volume" && kind !== "chapter" && kind !== "page")) return;
+  hierarchyDrag = { kind, id };
+  event.dataTransfer?.setData("text/plain", `${kind}:${id}`);
+  if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
+  row.classList.add("is-dragging");
+});
+
+appRoot.addEventListener("dragover", (event) => {
+  if (!(event instanceof DragEvent) || !hierarchyDrag) return;
+  const target = (event.target as HTMLElement).closest<HTMLElement>("[data-hierarchy-drag-kind][data-hierarchy-drag-id]");
+  if (!target || target.dataset.hierarchyDragKind !== hierarchyDrag.kind || target.dataset.hierarchyDragId === hierarchyDrag.id) return;
+  event.preventDefault();
+  if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+  document.querySelectorAll(".is-drop-target").forEach((node) => node.classList.remove("is-drop-target"));
+  target.classList.add("is-drop-target");
+});
+
+appRoot.addEventListener("drop", (event) => {
+  if (!(event instanceof DragEvent) || !hierarchyDrag) return;
+  const target = (event.target as HTMLElement).closest<HTMLElement>("[data-hierarchy-drag-kind][data-hierarchy-drag-id]");
+  const targetId = target?.dataset.hierarchyDragId;
+  if (!targetId || target?.dataset.hierarchyDragKind !== hierarchyDrag.kind) return;
+  event.preventDefault();
+  const moved = hierarchyDrag.kind === "volume"
+    ? reorderProjectVolumes(hierarchyDrag.id, targetId)
+    : hierarchyDrag.kind === "chapter"
+      ? reorderProjectChapters(hierarchyDrag.id, targetId)
+      : reorderProjectPages(hierarchyDrag.id, targetId);
+  hierarchyDrag = null;
+  rerender(moved ? "เรียงโครงสร้างโปรเจกต์แล้ว" : "ย้ายรายการนี้ไม่ได้", moved ? "success" : "default");
+});
+
+appRoot.addEventListener("dragend", () => {
+  hierarchyDrag = null;
+  document.querySelectorAll(".is-dragging, .is-drop-target").forEach((node) => node.classList.remove("is-dragging", "is-drop-target"));
+});
+
 appRoot.addEventListener("pointerdown", (event) => {
   if (!(event instanceof PointerEvent)) return;
   const target = event.target as HTMLElement;
+
+  const navigatorMap = target.closest<HTMLElement>("[data-navigator-map]");
+  if (navigatorMap) {
+    event.preventDefault();
+    moveNavigatorTo(event, navigatorMap);
+    return;
+  }
 
   if (runtime.preferences.tool === "hand" && target.closest("[data-stage-viewport]")) {
     event.preventDefault();
@@ -1131,6 +1448,11 @@ appRoot.addEventListener("pointerdown", (event) => {
   }
 
   const activeTool = runtime.preferences.tool;
+  if (activeTool === toolId("rotate-canvas") && target.closest("[data-page-canvas]")) {
+    event.preventDefault();
+    beginCanvasRotation(event);
+    return;
+  }
   if (target.closest("[data-page-canvas]") && applyCanvasTool(event, activeTool)) {
     event.preventDefault();
     event.stopPropagation();
@@ -1191,7 +1513,7 @@ appRoot.addEventListener("pointerdown", (event) => {
     event.preventDefault();
     event.stopPropagation();
     const node = resizeHandle.closest<HTMLElement>("[data-element-id]");
-    const element = selectedElement();
+    const element = activePage().elements.find((candidate) => candidate.id === node?.dataset.elementId) ?? null;
     if (node && element) beginResize(event, element, node, resizeHandle.dataset.resize ?? "se");
     return;
   }
@@ -1201,7 +1523,7 @@ appRoot.addEventListener("pointerdown", (event) => {
     event.preventDefault();
     event.stopPropagation();
     const node = rotateHandle.closest<HTMLElement>("[data-element-id]");
-    const element = selectedElement();
+    const element = activePage().elements.find((candidate) => candidate.id === node?.dataset.elementId) ?? null;
     if (node && element) beginRotate(event, element, node);
     return;
   }

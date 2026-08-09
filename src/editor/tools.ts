@@ -6,6 +6,8 @@ export type ToolEngine =
   | "element-select"
   | "viewport-pan"
   | "viewport-zoom"
+  | "viewport-rotate"
+  | "viewport-navigator"
   | "selection-rectangle"
   | "selection-ellipse"
   | "selection-lasso"
@@ -19,6 +21,9 @@ export type ToolEngine =
   | "raster-shape"
   | "element-rotate"
   | "element-flip"
+  | "element-free-transform"
+  | "element-scale"
+  | "element-skew"
   | "color-sample"
   | "text-create"
   | "panel-create"
@@ -133,7 +138,7 @@ export const TOOL_CATALOG: readonly ToolSeed[] = [
 
 const EXPERIMENTAL = new Set([
   "magic-wand", "quick-selection", "magnetic-lasso", "shape-builder", "custom-shape", "gradient-tone", "stream-line", "saturated-line", "perspective-transform", "perspective-ruler", "symmetry-ruler", "sub-view", "compare-view",
-  "mixer-brush", "blend", "smudge", "decoration-brush", "pattern-brush", "texture-brush", "focus-line", "speed-line", "effect-line", "background-eraser", "magic-eraser",
+  "mixer-brush", "blend", "smudge", "decoration-brush", "pattern-brush", "texture-brush", "focus-line", "speed-line", "effect-line", "background-eraser", "magic-eraser", "skew",
 ]);
 
 const ADAPTERS = new Set(["select-subject", "object-selection", "content-aware-fill", "content-aware-scale", "remove", "spot-healing", "healing-brush", "patch", "frequency-separation", "3d-object", "3d-pose", "3d-camera", "3d-light", "pose-scanner", "hand-scanner", "timeline", "keyframe", "cel", "animation-folder", "onion-skin-animation", "inbetween", "camera-movement", "audio-track", "batch-process", "auto-action"]);
@@ -147,6 +152,8 @@ function engineFor(id: string): ToolEngine | undefined {
   if (id === "select" || id === "auto-select" || id === "layer-select") return "element-select";
   if (id === "hand") return "viewport-pan";
   if (id === "zoom") return "viewport-zoom";
+  if (id === "rotate-canvas") return "viewport-rotate";
+  if (id === "navigator") return "viewport-navigator";
   if (id === "rectangular-marquee") return "selection-rectangle";
   if (id === "elliptical-marquee") return "selection-ellipse";
   if (id === "lasso" || id === "selection-pen") return "selection-lasso";
@@ -160,6 +167,9 @@ function engineFor(id: string): ToolEngine | undefined {
   if (SHAPE_ENGINES.has(id)) return "raster-shape";
   if (id === "rotate") return "element-rotate";
   if (id === "flip") return "element-flip";
+  if (id === "free-transform") return "element-free-transform";
+  if (id === "scale") return "element-scale";
+  if (id === "skew") return "element-skew";
   if (id === "eyedropper" || id === "color-picker" || id === "color-sampler") return "color-sample";
   if (id === "text" || id === "horizontal-type" || id === "vertical-type" || id === "text-box") return "text-create";
   if (id === "frame-border") return "panel-create";
@@ -238,6 +248,7 @@ export const DEFAULT_TOOL_KEYMAP: ToolKeymap = Object.freeze({
   Y: toolId("text"),
   C: toolId("crop"),
   I: toolId("eyedropper"),
+  R: toolId("rotate-canvas"),
 });
 
 export function resolveToolShortcut(key: string, keymap: ToolKeymap = DEFAULT_TOOL_KEYMAP): ToolId | null {

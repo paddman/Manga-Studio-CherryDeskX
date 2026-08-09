@@ -2,10 +2,12 @@ import { describe, expect, it } from "vitest";
 import {
   buildPixelSelection,
   clientToPagePoint,
+  clientToRotatedPagePoint,
   isEraserToolId,
   isUsablePixelSelection,
   rasterStrokeKindForToolId,
   selectionModeForToolId,
+  rotatedViewportSize,
 } from "../src/editor/interactions";
 import { rasterDimensionError } from "../src/editor/raster";
 
@@ -22,6 +24,18 @@ describe("editor interactions", () => {
       { left: 0, top: 0, width: 400, height: 500 },
       { width: 800, height: 1000 },
     )).toEqual({ x: 0, y: 1000, pressure: 1 });
+  });
+
+  it("inverts a rotated canvas transform for drawing and selection coordinates", () => {
+    const bounds = rotatedViewportSize(800, 1000, 0.5, 90);
+    expect(bounds.width).toBeCloseTo(500);
+    expect(bounds.height).toBeCloseTo(400);
+    expect(clientToRotatedPagePoint(
+      { clientX: 250, clientY: 250, pressure: 0.7 },
+      { left: 0, top: 0, width: 500, height: 400 },
+      { width: 800, height: 1000 },
+      90,
+    )).toMatchObject({ x: 500, y: 500, pressure: 0.7 });
   });
 
   it("builds normalized rectangular and freehand pixel selections", () => {

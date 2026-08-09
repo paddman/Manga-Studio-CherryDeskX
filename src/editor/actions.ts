@@ -19,6 +19,7 @@ import type {
 import { activePage, runtime, selectedElement, selectedElements, setSelection, transact } from "./state";
 import { movePageLayer, normalizePageLayerOrder, removeFromPageLayerOrder } from "./layers";
 import { getTemplatePanels } from "./templates";
+import { resizePageContent } from "./document";
 
 export function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
@@ -367,6 +368,8 @@ export function setSelectedProperty(prop: string, rawValue: string | boolean): v
       "width",
       "height",
       "rotation",
+      "skewX",
+      "skewY",
       "borderWidth",
       "borderRadius",
       "grayscale",
@@ -383,6 +386,8 @@ export function setSelectedProperty(prop: string, rawValue: string | boolean): v
     record[prop] = numericProps.has(prop) ? Number(rawValue) : rawValue;
     element.width = Math.max(10, element.width);
     element.height = Math.max(10, element.height);
+    element.skewX = clamp(element.skewX, -75, 75);
+    element.skewY = clamp(element.skewY, -75, 75);
   });
 }
 
@@ -390,13 +395,9 @@ export function setPageProperty(prop: string, rawValue: string): void {
   transact(() => {
     const page = activePage();
     if (prop === "page-name") page.name = rawValue;
-    if (prop === "page-width") page.width = clamp(Number(rawValue), 320, 3000);
-    if (prop === "page-height") page.height = clamp(Number(rawValue), 320, 5000);
+    if (prop === "page-width") resizePageContent(page, clamp(Number(rawValue), 320, 5000), page.height);
+    if (prop === "page-height") resizePageContent(page, page.width, clamp(Number(rawValue), 320, 8000));
     if (prop === "page-background") page.background = rawValue;
-    page.rasterLayers.forEach((layer) => {
-      layer.width = page.width;
-      layer.height = page.height;
-    });
   });
 }
 

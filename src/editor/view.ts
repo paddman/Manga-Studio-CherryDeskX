@@ -13,6 +13,8 @@ import { getCropRect } from "./actions";
 import { TOOL_DEFINITIONS, TOOL_GROUP_LABELS, type ToolGroup } from "./tools";
 import { activePage, runtime, selectedElement } from "./state";
 import { isRasterLayer, orderedPageLayers } from "./layers";
+import { PAGE_PRESETS } from "./document";
+import { rotatedViewportSize } from "./interactions";
 
 function escapeHtml(value: string): string {
   return value
@@ -94,7 +96,7 @@ export function renderApp(): string {
           <button class="icon-button ${prefs.showSafeArea ? "is-active" : ""}" data-action="toggle-safe" title="Safe area">${icon("safe")}</button>
           <div class="zoom-control"><button data-action="zoom-out">−</button><span>${zoomPercent}%</span><button data-action="zoom-in">+</button></div>
           <button class="secondary-button" data-action="preview">${icon("preview")} ${prefs.preview ? "กลับไปแก้ไข" : "ดูตัวอย่าง"}</button>
-          <select class="export-format-select" data-export-format aria-label="รูปแบบส่งออก"><option value="png">PNG หน้านี้</option><option value="jpg">JPG หน้านี้</option><option value="pdf">PDF ทั้งบท</option><option value="cbz">CBZ ทั้งบท</option><option value="zip">ZIP ทั้งโปรเจกต์</option><option value="webtoon">Webtoon ยาว</option></select>
+          <select class="export-format-select" data-export-format aria-label="รูปแบบส่งออก"><option value="png" ${prefs.exportFormat === "png" ? "selected" : ""}>PNG</option><option value="jpg" ${prefs.exportFormat === "jpg" ? "selected" : ""}>JPG</option><option value="pdf" ${prefs.exportFormat === "pdf" ? "selected" : ""}>PDF</option><option value="cbz" ${prefs.exportFormat === "cbz" ? "selected" : ""}>CBZ</option><option value="zip" ${prefs.exportFormat === "zip" ? "selected" : ""}>ZIP</option><option value="webtoon" ${prefs.exportFormat === "webtoon" ? "selected" : ""}>Webtoon</option></select>
           <button class="primary-button" data-action="export">${icon("export")} ส่งออก</button>
         </div>
       </header>
@@ -106,7 +108,15 @@ export function renderApp(): string {
       ${renderPageStrip()}
     </div>
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
+    ${renderExportTask()}
   `;
+}
+
+function renderExportTask(): string {
+  const task = runtime.exportTask;
+  if (task.status !== "running") return "";
+  const percent = task.total > 0 ? Math.round((task.completed / task.total) * 100) : 0;
+  return `<div class="export-progress-dialog" role="dialog" aria-modal="true" aria-label="ความคืบหน้าการส่งออก"><div><span class="eyebrow">EXPORT</span><h2>${escapeHtml(task.label || "กำลังสร้างไฟล์…")}</h2><progress max="${Math.max(1, task.total)}" value="${task.completed}"></progress><p>${task.completed} / ${task.total} หน้า • ${percent}%</p><button data-action="cancel-export">ยกเลิกการส่งออก</button></div></div>`;
 }
 
 function renderLeftSidebar(): string {
@@ -237,19 +247,27 @@ function renderStage(): string {
   const pixelSelection = runtime.pixelSelection
     ? `<div class="pixel-selection selection-mode-${runtime.pixelSelection.mode}" style="left:${runtime.pixelSelection.x}px;top:${runtime.pixelSelection.y}px;width:${runtime.pixelSelection.width}px;height:${runtime.pixelSelection.height}px"></div>`
     : "";
+  const rotatedSize = rotatedViewportSize(page.width, page.height, prefs.zoom, prefs.canvasRotation);
   return `
     <section class="stage-column">
-      <div class="stage-meta"><div><span class="page-name">${escapeHtml(page.name)}</span><span>${page.width} × ${page.height}px</span></div><div class="stage-hint">ลากเพื่อขยับ • ดึงจุดเพื่อย่อ/ขยาย • ปุ่มบนเพื่อหมุน</div></div>
+      <div class="stage-meta"><div><span class="page-name">${escapeHtml(page.name)}</span><span>${page.width} × ${page.height}px</span><span>Canvas ${Math.round(prefs.canvasRotation)}°</span></div><div class="stage-hint">ลากเพื่อขยับ • ดึงจุดเพื่อย่อ/ขยาย • ปุ่มบนเพื่อหมุน</div></div>
       <div class="stage-viewport ${prefs.tool === "hand" ? "hand-mode" : ""}" data-stage-viewport>
         ${image ? `<div class="stage-image-toolbar" aria-label="เครื่องมือแต่งรูป"><strong>แก้ไขรูป</strong><button data-action="enter-crop">${prefs.cropElementId === image.id ? "เสร็จสิ้น Crop" : "เลือกพื้นที่ Crop"}</button><button data-action="replace-image">เปลี่ยนรูป</button><button data-action="reset-image-edits">รีเซ็ต</button></div>` : ""}
-        <div class="canvas-sizer" style="width:${Math.round(page.width * prefs.zoom)}px;height:${Math.round(page.height * prefs.zoom)}px">
-          <div id="pageCanvas" class="page-canvas ${prefs.showGrid ? "show-grid" : ""}" data-page-canvas style="width:${page.width}px;height:${page.height}px;background:${page.background};transform:scale(${prefs.zoom})">
-            ${prefs.showSafeArea ? `<div class="safe-area"></div>` : ""}${layers}${guides}${rectangle}${pixelSelection}
+        <div class="canvas-sizer" style="width:${Math.ceil(rotatedSize.width)}px;height:${Math.ceil(rotatedSize.height)}px">
+          <div id="pageCanvas" class="page-canvas ${prefs.showGrid ? "show-grid" : ""}" data-page-canvas style="left:50%;top:50%;width:${page.width}px;height:${page.height}px;background:${page.background};background-size:${Math.max(4, runtime.project.gutter)}px ${Math.max(4, runtime.project.gutter)}px;transform-origin:center;transform:translate(-50%,-50%) rotate(${prefs.canvasRotation}deg) scale(${prefs.zoom})">
+            ${prefs.showSafeArea ? `<div class="safe-area" style="inset:${runtime.project.safeArea}px"></div>` : ""}${layers}${guides}${rectangle}${pixelSelection}
           </div>
         </div>
+        ${prefs.showNavigator ? renderNavigator() : ""}
       </div>
     </section>
   `;
+}
+
+function renderNavigator(): string {
+  const page = activePage();
+  const panels = page.elements.filter((element) => element.kind === "panel").map((panel) => `<i style="left:${panel.x / page.width * 100}%;top:${panel.y / page.height * 100}%;width:${panel.width / page.width * 100}%;height:${panel.height / page.height * 100}%"></i>`).join("");
+  return `<aside class="navigator-panel" aria-label="Navigator"><div><strong>Navigator</strong><button data-action="reset-canvas-view" aria-label="รีเซ็ตมุมและซูม">รีเซ็ต</button></div><button class="navigator-map" data-navigator-map aria-label="คลิกเพื่อเลื่อนไปยังตำแหน่งบนหน้า" style="aspect-ratio:${page.width}/${page.height};background:${page.background}">${panels}<span></span></button><small>Zoom ${Math.round(runtime.preferences.zoom * 100)}% • ${Math.round(runtime.preferences.canvasRotation)}°</small></aside>`;
 }
 
 function renderCanvasElement(element: MangaElement, index: number, allElements: MangaElement[]): string {
@@ -265,7 +283,7 @@ function renderCanvasElement(element: MangaElement, index: number, allElements: 
     .join(" ");
   const scaleX = element.flipX ? -1 : 1;
   const scaleY = element.flipY ? -1 : 1;
-  const style = `left:${element.x}px;top:${element.y}px;width:${element.width}px;height:${element.height}px;transform:rotate(${element.rotation}deg) scale(${scaleX},${scaleY});opacity:${element.opacity};z-index:${index + 1}`;
+  const style = `left:${element.x}px;top:${element.y}px;width:${element.width}px;height:${element.height}px;transform:rotate(${element.rotation}deg) skew(${element.skewX}deg,${element.skewY}deg) scale(${scaleX},${scaleY});opacity:${element.opacity};z-index:${index + 1}`;
   let content = "";
   if (element.kind === "panel") {
     const children = allElements.filter((child) => child.parentId === element.id);
@@ -314,13 +332,20 @@ function renderRasterInspector(layer: RasterLayer): string {
 
 function renderPageInspector(): string {
   const page = activePage();
+  const presets = PAGE_PRESETS.map((preset) => `<option value="${preset.id}" ${runtime.project.pagePreset === preset.id ? "selected" : ""}>${preset.label}${preset.width && preset.height ? ` • ${preset.width}×${preset.height}` : ""}</option>`).join("");
   return `
     <section class="inspector-section">
       <div class="inspector-heading"><div><span class="eyebrow">DOCUMENT</span><h2>ตั้งค่าหน้า</h2></div></div>
       ${fieldText("ชื่อหน้า", "page-name", page.name)}
-      <div class="field-row two-columns">${fieldNumber("กว้าง", "page-width", page.width, 320, 3000)}${fieldNumber("สูง", "page-height", page.height, 320, 5000)}</div>
+      <label class="field-block"><span>Page preset</span><select data-page-preset>${presets}</select></label>
+      <div class="field-row two-columns">${fieldNumber("กว้าง", "page-width", page.width, 320, 5000)}${fieldNumber("สูง", "page-height", page.height, 320, 8000)}</div>
       ${fieldColor("สีพื้นหลัง", "page-background", page.background)}
+      <div class="section-label">งานพิมพ์และกรอบเผยแพร่</div>
+      <div class="field-row two-columns">${documentNumberField("DPI", "dpi", runtime.project.dpi, 72, 1200)}<label class="field-block compact"><span>Color mode</span><select data-document-prop="colorMode"><option value="rgb" ${runtime.project.colorMode === "rgb" ? "selected" : ""}>RGB</option><option value="cmyk" ${runtime.project.colorMode === "cmyk" ? "selected" : ""}>CMYK metadata</option></select></label></div>
+      <div class="field-row two-columns">${documentNumberField("Bleed (mm)", "bleed", runtime.project.bleed, 0, 30, 0.5)}${documentNumberField("Trim (mm)", "trim", runtime.project.trim, 0, 30, 0.5)}</div>
+      <div class="field-row two-columns">${documentNumberField("Safe area (px)", "safeArea", runtime.project.safeArea, 0, 500)}${documentNumberField("Gutter/Grid (px)", "gutter", runtime.project.gutter, 0, 500)}</div>
       <div class="section-label">พื้นหลังไฟล์ส่งออก</div><label class="toggle-field"><input type="checkbox" data-export-transparent ${runtime.preferences.exportTransparent ? "checked" : ""}/><span>PNG โปร่งใส (ไม่วาดพื้นหน้า)</span></label><label class="field-block color-field"><span>JPG / PDF / CBZ</span><span class="color-input-wrap"><input type="color" data-export-background value="${escapeHtml(runtime.preferences.exportBackgroundColor)}"/><code>${escapeHtml(runtime.preferences.exportBackgroundColor)}</code></span></label>
+      <div class="section-label">ขอบเขตและความละเอียด Export</div><div class="field-row two-columns"><label class="field-block"><span>ขอบเขต</span><select data-export-scope><option value="page" ${runtime.preferences.exportScope === "page" ? "selected" : ""}>หน้านี้</option><option value="chapter" ${runtime.preferences.exportScope === "chapter" ? "selected" : ""}>บทนี้</option><option value="volume" ${runtime.preferences.exportScope === "volume" ? "selected" : ""}>เล่มนี้</option><option value="project" ${runtime.preferences.exportScope === "project" ? "selected" : ""}>ทั้งโปรเจกต์</option></select></label><label class="field-block"><span>ความละเอียด</span><select data-export-scale-mode><option value="1x" ${runtime.preferences.exportScaleMode === "1x" ? "selected" : ""}>1×</option><option value="2x" ${runtime.preferences.exportScaleMode === "2x" ? "selected" : ""}>2×</option><option value="300dpi" ${runtime.preferences.exportScaleMode === "300dpi" ? "selected" : ""}>300 DPI</option><option value="custom" ${runtime.preferences.exportScaleMode === "custom" ? "selected" : ""}>Custom</option></select></label></div><div class="field-row two-columns"><label class="field-block compact"><span>Custom scale</span><input type="number" data-export-custom-scale min="0.25" max="8" step="0.25" value="${runtime.preferences.exportCustomScale}"/></label><label class="field-block compact"><span>Webtoon slice สูงสุด</span><input type="number" data-export-max-height min="1000" max="32000" step="500" value="${runtime.preferences.exportMaxWebtoonHeight}"/></label></div><label class="toggle-field"><input type="checkbox" data-export-include-bleed ${runtime.preferences.exportIncludeBleed ? "checked" : ""}/><span>รวม Bleed ${runtime.project.bleed} mm</span></label><label class="toggle-field"><input type="checkbox" data-export-crop-marks ${runtime.preferences.exportCropMarks ? "checked" : ""}/><span>เพิ่ม Crop marks</span></label>
       <label class="field-block"><span>ทิศทางการอ่าน</span><select data-project-prop="readingDirection"><option value="rtl" ${runtime.project.readingDirection === "rtl" ? "selected" : ""}>ขวา → ซ้าย (Manga)</option><option value="ltr" ${runtime.project.readingDirection === "ltr" ? "selected" : ""}>ซ้าย → ขวา (Comic)</option></select></label>
       ${renderHierarchyManager()}
       <div class="document-stats"><span><strong>${page.elements.length}</strong> องค์ประกอบ</span><span><strong>${runtime.project.pages.length}</strong> หน้า</span><span><strong>${runtime.project.assets.length}</strong> รูป</span></div>
@@ -336,7 +361,7 @@ function renderElementInspector(element: MangaElement): string {
       <div class="inspector-heading"><div><span class="eyebrow">${element.kind.toUpperCase()}</span><h2>${escapeHtml(element.name)}</h2></div><button class="icon-button small" data-action="delete-element">${icon("trash")}</button></div>
       ${fieldText("ชื่อเลเยอร์", "name", element.name)}
       <div class="field-row four-columns transform-fields">${fieldNumber("X", "x", Math.round(element.x), -5000, 5000)}${fieldNumber("Y", "y", Math.round(element.y), -5000, 5000)}${fieldNumber("W", "width", Math.round(element.width), 10, 5000)}${fieldNumber("H", "height", Math.round(element.height), 10, 5000)}</div>
-      <div class="field-row two-columns">${fieldNumber("หมุน", "rotation", Math.round(element.rotation), -360, 360)}${fieldNumber("โปร่งใส %", "opacity-percent", Math.round(element.opacity * 100), 0, 100)}</div>
+      <div class="field-row two-columns">${fieldNumber("หมุน", "rotation", Math.round(element.rotation), -360, 360)}${fieldNumber("โปร่งใส %", "opacity-percent", Math.round(element.opacity * 100), 0, 100)}</div><div class="field-row two-columns">${fieldNumber("Skew X", "skewX", Math.round(element.skewX), -75, 75)}${fieldNumber("Skew Y", "skewY", Math.round(element.skewY), -75, 75)}</div>
       <label class="toggle-field"><input type="checkbox" data-element-prop="lockAspect" ${element.lockAspect ? "checked" : ""}/><span>ล็อกสัดส่วนตอนย่อ/ขยาย</span></label>
       ${renderKindInspector(element)}
       <div class="inspector-actions-grid"><button data-action="duplicate-element">${icon("duplicate")} ทำสำเนา</button><button data-action="toggle-lock">${icon(element.locked ? "unlock" : "lock")} ${element.locked ? "ปลดล็อก" : "ล็อก"}</button><button data-action="bring-forward">${icon("up")} ขึ้นหนึ่งชั้น</button><button data-action="send-backward">${icon("down")} ลงหนึ่งชั้น</button><button data-action="flip-horizontal">กลับด้านซ้าย–ขวา</button><button data-action="flip-vertical">กลับด้านบน–ล่าง</button></div>
@@ -380,6 +405,10 @@ function fieldNumber(label: string, prop: string, value: number, min: number, ma
   return `<label class="field-block compact"><span>${label}</span><input type="number" data-element-prop="${prop}" value="${value}" min="${min}" max="${max}" step="${step}"/></label>`;
 }
 
+function documentNumberField(label: string, prop: string, value: number, min: number, max: number, step = 1): string {
+  return `<label class="field-block compact"><span>${label}</span><input type="number" data-document-prop="${prop}" value="${value}" min="${min}" max="${max}" step="${step}"/></label>`;
+}
+
 function fieldColor(label: string, prop: string, value: string): string {
   return `<label class="field-block color-field"><span>${label}</span><span class="color-input-wrap"><input type="color" data-element-prop="${prop}" value="${value}"/><code>${value}</code></span></label>`;
 }
@@ -395,7 +424,9 @@ function renderMultiInspector(count: number): string {
 function renderHierarchyManager(): string {
   const volume = runtime.project.volumes.find((item) => item.id === runtime.project.activeVolumeId) ?? runtime.project.volumes[0];
   const chapter = runtime.project.chapters.find((item) => item.id === runtime.project.activeChapterId) ?? runtime.project.chapters[0];
-  return `<div class="hierarchy-manager"><div class="section-label">เล่มและบท</div><div class="field-row two-columns"><label class="field-block"><span>Volume</span><select data-hierarchy-volume>${runtime.project.volumes.map((item) => `<option value="${escapeHtml(item.id)}" ${item.id === volume?.id ? "selected" : ""}>${escapeHtml(item.name)}</option>`).join("")}</select></label><label class="field-block"><span>Chapter</span><select data-hierarchy-chapter>${runtime.project.chapters.filter((item) => item.volumeId === volume?.id).map((item) => `<option value="${escapeHtml(item.id)}" ${item.id === chapter?.id ? "selected" : ""}>${escapeHtml(item.name)}</option>`).join("")}</select></label></div><div class="field-row two-columns"><label class="field-block"><span>ชื่อเล่ม</span><input type="text" data-hierarchy-volume-name value="${escapeHtml(volume?.name ?? "")}"/></label><label class="field-block"><span>ชื่อบท</span><input type="text" data-hierarchy-chapter-name value="${escapeHtml(chapter?.name ?? "")}"/></label></div><div class="inspector-actions-grid"><button data-action="add-volume">+ เล่ม</button><button data-action="add-chapter">+ บท</button><button data-action="delete-volume" ${runtime.project.volumes.length <= 1 ? "disabled" : ""}>ลบเล่ม</button><button data-action="delete-chapter" ${runtime.project.chapters.length <= 1 ? "disabled" : ""}>ลบบท</button></div></div>`;
+  const volumes = runtime.project.volumes.map((item) => `<button type="button" class="hierarchy-sort-row ${item.id === volume?.id ? "is-active" : ""}" draggable="true" data-hierarchy-drag-kind="volume" data-hierarchy-drag-id="${escapeHtml(item.id)}" data-hierarchy-select-volume="${escapeHtml(item.id)}"><span aria-hidden="true">⠿</span><strong>${escapeHtml(item.name)}</strong><small>${item.chapterIds.length} บท</small></button>`).join("");
+  const chapters = runtime.project.chapters.filter((item) => item.volumeId === volume?.id).map((item) => `<button type="button" class="hierarchy-sort-row ${item.id === chapter?.id ? "is-active" : ""}" draggable="true" data-hierarchy-drag-kind="chapter" data-hierarchy-drag-id="${escapeHtml(item.id)}" data-hierarchy-select-chapter="${escapeHtml(item.id)}"><span aria-hidden="true">⠿</span><strong>${escapeHtml(item.name)}</strong><small>${item.pageIds.length} หน้า</small></button>`).join("");
+  return `<div class="hierarchy-manager"><div class="section-label">เล่มและบท</div><div class="field-row two-columns"><label class="field-block"><span>Volume</span><select data-hierarchy-volume>${runtime.project.volumes.map((item) => `<option value="${escapeHtml(item.id)}" ${item.id === volume?.id ? "selected" : ""}>${escapeHtml(item.name)}</option>`).join("")}</select></label><label class="field-block"><span>Chapter</span><select data-hierarchy-chapter>${runtime.project.chapters.filter((item) => item.volumeId === volume?.id).map((item) => `<option value="${escapeHtml(item.id)}" ${item.id === chapter?.id ? "selected" : ""}>${escapeHtml(item.name)}</option>`).join("")}</select></label></div><div class="hierarchy-sort-columns"><div><span>ลากเรียง Volume</span>${volumes}</div><div><span>ลากเรียง Chapter</span>${chapters}</div></div><div class="field-row two-columns"><label class="field-block"><span>ชื่อเล่ม</span><input type="text" data-hierarchy-volume-name value="${escapeHtml(volume?.name ?? "")}"/></label><label class="field-block"><span>ชื่อบท</span><input type="text" data-hierarchy-chapter-name value="${escapeHtml(chapter?.name ?? "")}"/></label></div><div class="inspector-actions-grid"><button data-action="add-volume">+ เล่ม</button><button data-action="duplicate-volume">สำเนาเล่ม</button><button data-action="add-chapter">+ บท</button><button data-action="duplicate-chapter">สำเนาบท</button><button data-action="delete-volume" ${runtime.project.volumes.length <= 1 ? "disabled" : ""}>ลบเล่ม</button><button data-action="delete-chapter" ${runtime.project.chapters.length <= 1 ? "disabled" : ""}>ลบบท</button></div><p class="sidebar-note">ลากแถวเพื่อเรียงเล่ม/บท และลากการ์ดหน้าด้านล่างเพื่อย้ายหรือเรียงหน้าข้ามบท</p></div>`;
 }
 
 function saveStatusLabel(): string {
@@ -435,7 +466,7 @@ function renderPageStrip(): string {
           (element) => `<i style="left:${(element.x / page.width) * 100}%;top:${(element.y / page.height) * 100}%;width:${(element.width / page.width) * 100}%;height:${(element.height / page.height) * 100}%"></i>`,
         )
         .join("");
-      return `<button class="page-card ${page.id === runtime.project.activePageId ? "is-active" : ""}" data-page-id="${escapeHtml(page.id)}"><span class="page-number">${index + 1}</span><span class="page-mini" style="background:${page.background}">${mini}</span><span class="page-card-meta"><strong>${escapeHtml(page.name)}</strong><small>${panels.length} ช่อง</small></span></button>`;
+      return `<button class="page-card ${page.id === runtime.project.activePageId ? "is-active" : ""}" draggable="true" data-hierarchy-drag-kind="page" data-hierarchy-drag-id="${escapeHtml(page.id)}" data-page-id="${escapeHtml(page.id)}"><span class="page-number">${index + 1}</span><span class="page-mini" style="background:${page.background}">${mini}</span><span class="page-card-meta"><strong>${escapeHtml(page.name)}</strong><small>${panels.length} ช่อง</small></span></button>`;
     })
     .join("");
   return `<footer class="page-strip"><div class="page-strip-label"><span>หน้า</span><strong>${runtime.project.pages.length}</strong></div><div class="page-cards">${cards}</div><div class="page-actions"><button data-action="add-page">${icon("plus")} หน้าใหม่</button><button data-action="duplicate-page">${icon("duplicate")} ทำสำเนา</button><button data-action="move-page-back" title="เลื่อนหน้าก่อนหน้า">←</button><button data-action="move-page-forward" title="เลื่อนหน้าถัดไป">→</button><button data-action="export-project">ส่งออก .cherrymanga</button><button data-action="import-project">นำเข้า</button><button data-action="delete-page" ${runtime.project.pages.length <= 1 ? "disabled" : ""}>${icon("trash")}</button></div></footer>`;

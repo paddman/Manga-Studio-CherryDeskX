@@ -17,9 +17,11 @@ describe("project persistence", () => {
     };
     const project = migrateProject(legacy);
     const json = JSON.stringify(serializeProject(project));
-    expect(project.schemaVersion).toBe(3);
+    expect(project.schemaVersion).toBe(4);
     expect(project.pages[0]?.rasterLayers).toEqual([]);
     expect(project.pages[0]?.elements[0]?.kind).toBe("image");
+    expect(project.pages[0]?.elements[0]?.skewX).toBe(0);
+    expect(project.pages[0]?.elements[0]?.skewY).toBe(0);
     expect(json).not.toContain("data:image");
     expect(project.pages[0]?.elements[0]?.kind === "image" ? project.pages[0].elements[0].crop.scale : 0).toBe(1);
   });
@@ -60,9 +62,9 @@ describe("project persistence", () => {
     expect(markerOffset).toBeGreaterThan(-1);
     bytes[markerOffset + marker.length - 1] = "9".charCodeAt(0);
     await expect(importProjectBundle(new Blob([bytes]))).rejects.toThrow("checksum");
-    expect(() => assertSupportedProjectSchema({ schemaVersion: 99, pages: [{}] })).toThrow("รองรับถึง version 3");
+    expect(() => assertSupportedProjectSchema({ schemaVersion: 99, pages: [{}] })).toThrow("รองรับถึง version 4");
     expect(() => assertSupportedProjectSchema({ schemaVersion: "3", pages: [{}] })).toThrow("schemaVersion");
-    expect(() => assertSupportedProjectSchema({ schemaVersion: 3 })).toThrow("ไม่มีหน้ามังงะ");
+    expect(() => assertSupportedProjectSchema({ schemaVersion: 4 })).toThrow("ไม่มีหน้ามังงะ");
   });
 
   it("accepts a real PNG file without relying on its browser MIME value", async () => {

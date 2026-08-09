@@ -29,6 +29,41 @@ export function clientToPagePoint(
   };
 }
 
+export function rotatedViewportSize(width: number, height: number, zoom: number, rotationDegrees: number): { width: number; height: number } {
+  const radians = rotationDegrees * Math.PI / 180;
+  const cosine = Math.abs(Math.cos(radians));
+  const sine = Math.abs(Math.sin(radians));
+  return {
+    width: (width * cosine + height * sine) * zoom,
+    height: (width * sine + height * cosine) * zoom,
+  };
+}
+
+export function clientToRotatedPagePoint(
+  point: ClientPoint,
+  transformedBounds: ViewportRect,
+  pageSize: { width: number; height: number },
+  rotationDegrees: number,
+): RasterPoint {
+  if (Math.abs(rotationDegrees % 360) < 0.001) return clientToPagePoint(point, transformedBounds, pageSize);
+  const radians = rotationDegrees * Math.PI / 180;
+  const cosine = Math.cos(radians);
+  const sine = Math.sin(radians);
+  const boundsAtUnitZoom = rotatedViewportSize(pageSize.width, pageSize.height, 1, rotationDegrees);
+  const zoomFromWidth = transformedBounds.width / Math.max(1, boundsAtUnitZoom.width);
+  const zoomFromHeight = transformedBounds.height / Math.max(1, boundsAtUnitZoom.height);
+  const zoom = Math.max(0.001, (zoomFromWidth + zoomFromHeight) / 2);
+  const screenX = (point.clientX - (transformedBounds.left + transformedBounds.width / 2)) / zoom;
+  const screenY = (point.clientY - (transformedBounds.top + transformedBounds.height / 2)) / zoom;
+  const localX = cosine * screenX + sine * screenY + pageSize.width / 2;
+  const localY = -sine * screenX + cosine * screenY + pageSize.height / 2;
+  return {
+    x: clampNumber(localX, 0, pageSize.width),
+    y: clampNumber(localY, 0, pageSize.height),
+    pressure: clampNumber(point.pressure || 1, 0.05, 1),
+  };
+}
+
 export function selectionModeForToolId(toolId: string): PixelSelectionShape["mode"] | null {
   if (toolId === "rectangular-marquee") return "rectangle";
   if (toolId === "elliptical-marquee") return "ellipse";

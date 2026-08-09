@@ -6,8 +6,11 @@ export type ReadingDirection = "ltr" | "rtl";
 export type PagePreset = "manga-b5" | "manga-a5" | "comic" | "a4" | "webtoon" | "custom";
 export type ColorMode = "rgb" | "cmyk";
 export type WritingMode = "horizontal" | "vertical";
+export type ExportFormat = "png" | "jpg" | "pdf" | "cbz" | "zip" | "webtoon";
+export type ExportScope = "page" | "chapter" | "volume" | "project";
+export type ExportScaleMode = "1x" | "2x" | "300dpi" | "custom";
 
-export const PROJECT_SCHEMA_VERSION = 3;
+export const PROJECT_SCHEMA_VERSION = 4;
 
 export type ToolId = string & { readonly __toolId: unique symbol };
 export type Tool = ToolId;
@@ -92,6 +95,8 @@ export interface BaseElement {
   width: number;
   height: number;
   rotation: number;
+  skewX: number;
+  skewY: number;
   opacity: number;
   locked: boolean;
   hidden: boolean;
@@ -237,6 +242,15 @@ export interface EditorPreferences {
   activeRasterLayerId: string | null;
   exportTransparent: boolean;
   exportBackgroundColor: string;
+  exportFormat: ExportFormat;
+  exportScope: ExportScope;
+  exportScaleMode: ExportScaleMode;
+  exportCustomScale: number;
+  exportMaxWebtoonHeight: number;
+  exportIncludeBleed: boolean;
+  exportCropMarks: boolean;
+  canvasRotation: number;
+  showNavigator: boolean;
 }
 
 export interface SelectionGuide {
