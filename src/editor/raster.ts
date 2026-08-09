@@ -1,5 +1,16 @@
 import { brushPreset } from "./tools";
 import type { MangaPage, PixelSelectionShape, RasterLayer, RasterPoint, RasterStroke } from "../types";
+import { isRasterLayer, orderedPageLayers } from "./layers";
+
+export const MAX_RASTER_DIMENSION = 16_384;
+export const MAX_RASTER_PIXELS = 32_000_000;
+
+export function rasterDimensionError(width: number, height: number): string | null {
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width < 1 || height < 1) return "ขนาด Raster ไม่ถูกต้อง";
+  if (width > MAX_RASTER_DIMENSION || height > MAX_RASTER_DIMENSION) return `Raster รองรับด้านละไม่เกิน ${MAX_RASTER_DIMENSION.toLocaleString()} px`;
+  if (width * height > MAX_RASTER_PIXELS) return `Raster รองรับไม่เกิน ${MAX_RASTER_PIXELS.toLocaleString()} pixels ต่อหน้า`;
+  return null;
+}
 
 function drawPolyline(ctx: CanvasRenderingContext2D, points: RasterPoint[]): void {
   const first = points[0];
@@ -40,6 +51,132 @@ function withSelection(ctx: CanvasRenderingContext2D, selection: PixelSelectionS
   ctx.restore();
 }
 
+function pointInSelection(x: number, y: number, selection: PixelSelectionShape | undefined): boolean {
+  if (!selection) return true;
+  if (selection.mode === "rectangle") return x >= selection.x && x <= selection.x + selection.width && y >= selection.y && y <= selection.y + selection.height;
+  if (selection.mode === "ellipse") {
+    const radiusX = Math.max(1, selection.width / 2);
+    const radiusY = Math.max(1, selection.height / 2);
+    const dx = (x - (selection.x + radiusX)) / radiusX;
+    const dy = (y - (selection.y + radiusY)) / radiusY;
+    return dx * dx + dy * dy <= 1;
+  }
+  let inside = false;
+  const points = selection.points;
+  for (let current = 0, previous = points.length - 1; current < points.length; previous = current, current += 1) {
+    const currentPoint = points[current];
+    const previousPoint = points[previous];
+    if (!currentPoint || !previousPoint) continue;
+    const intersects = (currentPoint.y > y) !== (previousPoint.y > y)
+      && x < ((previousPoint.x - currentPoint.x) * (y - currentPoint.y)) / (previousPoint.y - currentPoint.y) + currentPoint.x;
+    if (intersects) inside = !inside;
+  }
+  return inside;
+}
+
+function parseHexColor(color: string): [number, number, number] {
+  const normalized = color.trim().replace(/^#/, "");
+  if (/^[0-9a-f]{3}$/i.test(normalized)) {
+    return normalized.split("").map((value) => Number.parseInt(`${value}${value}`, 16)) as [number, number, number];
+  }
+  if (/^[0-9a-f]{6}$/i.test(normalized)) {
+    return [0, 2, 4].map((index) => Number.parseInt(normalized.slice(index, index + 2), 16)) as [number, number, number];
+  }
+  return [0, 0, 0];
+}
+
+export interface FloodFillOptions {
+  startX: number;
+  startY: number;
+  color: string;
+  opacity: number;
+  tolerance: number;
+  erase: boolean;
+  selection?: PixelSelectionShape;
+}
+
+export function floodFillPixels(pixels: Uint8ClampedArray, width: number, height: number, options: FloodFillOptions): number {
+  if (width < 1 || height < 1 || pixels.length < width * height * 4) return 0;
+  const startX = Math.min(width - 1, Math.max(0, Math.floor(options.startX)));
+  const startY = Math.min(height - 1, Math.max(0, Math.floor(options.startY)));
+  if (!pointInSelection(startX, startY, options.selection)) return 0;
+  const startOffset = (startY * width + startX) * 4;
+  const target = [pixels[startOffset] ?? 0, pixels[startOffset + 1] ?? 0, pixels[startOffset + 2] ?? 0, pixels[startOffset + 3] ?? 0] as const;
+  const replacement = parseHexColor(options.color);
+  const opacity = Math.min(1, Math.max(0, options.opacity));
+  if (options.erase && target[3] === 0) return 0;
+  if (!options.erase && opacity === 1 && target[0] === replacement[0] && target[1] === replacement[1] && target[2] === replacement[2] && target[3] === 255) return 0;
+  const tolerance = Math.min(255, Math.max(0, options.tolerance));
+  const visited = new Uint8Array(width * height);
+  const stack: number[] = [startY * width + startX];
+  let changed = 0;
+  const matches = (index: number): boolean => {
+    if (visited[index]) return false;
+    const offset = index * 4;
+    return Math.max(
+      Math.abs((pixels[offset] ?? 0) - target[0]),
+      Math.abs((pixels[offset + 1] ?? 0) - target[1]),
+      Math.abs((pixels[offset + 2] ?? 0) - target[2]),
+      Math.abs((pixels[offset + 3] ?? 0) - target[3]),
+    ) <= tolerance;
+  };
+  const replace = (index: number): void => {
+    const offset = index * 4;
+    if (options.erase) {
+      pixels[offset + 3] = Math.round((pixels[offset + 3] ?? 0) * (1 - opacity));
+      return;
+    }
+    pixels[offset] = Math.round(replacement[0] * opacity + (pixels[offset] ?? 0) * (1 - opacity));
+    pixels[offset + 1] = Math.round(replacement[1] * opacity + (pixels[offset + 1] ?? 0) * (1 - opacity));
+    pixels[offset + 2] = Math.round(replacement[2] * opacity + (pixels[offset + 2] ?? 0) * (1 - opacity));
+    pixels[offset + 3] = Math.round(255 * opacity + (pixels[offset + 3] ?? 0) * (1 - opacity));
+  };
+  while (stack.length) {
+    const seed = stack.pop();
+    if (seed === undefined || !matches(seed)) continue;
+    const seedY = Math.floor(seed / width);
+    let x = seed % width;
+    while (x > 0) {
+      const previous = seedY * width + x - 1;
+      if (!matches(previous) || !pointInSelection(x - 1, seedY, options.selection)) break;
+      x -= 1;
+    }
+    for (; x < width; x += 1) {
+      const index = seedY * width + x;
+      if (!matches(index) || !pointInSelection(x, seedY, options.selection)) break;
+      visited[index] = 1;
+      replace(index);
+      changed += 1;
+      if (seedY > 0) {
+        const above = index - width;
+        if (matches(above) && pointInSelection(x, seedY - 1, options.selection)) stack.push(above);
+      }
+      if (seedY + 1 < height) {
+        const below = index + width;
+        if (matches(below) && pointInSelection(x, seedY + 1, options.selection)) stack.push(below);
+      }
+    }
+  }
+  return changed;
+}
+
+function floodFill(ctx: CanvasRenderingContext2D, stroke: RasterStroke, width: number, height: number, erase: boolean): void {
+  const point = stroke.points[0];
+  if (!point) return;
+  const image = ctx.getImageData(0, 0, width, height);
+  const changed = floodFillPixels(image.data, width, height, {
+    startX: point.x,
+    startY: point.y,
+    color: stroke.color,
+    opacity: stroke.opacity,
+    tolerance: stroke.tolerance ?? 24,
+    erase,
+    selection: stroke.selection,
+  });
+  if (!changed) return;
+  ctx.putImageData(image, 0, 0);
+}
+
 function drawSoftStamp(ctx: CanvasRenderingContext2D, point: RasterPoint, size: number, color: string, opacity: number, hardness: number): void {
   const radius = Math.max(0.5, size * point.pressure / 2);
   const gradient = ctx.createRadialGradient(point.x, point.y, radius * Math.max(0.02, hardness), point.x, point.y, radius);
@@ -65,7 +202,50 @@ function drawSpray(ctx: CanvasRenderingContext2D, points: RasterPoint[], size: n
   }
 }
 
-function drawBrushStroke(ctx: CanvasRenderingContext2D, stroke: RasterStroke): void {
+function drawMangaEffectStroke(ctx: CanvasRenderingContext2D, stroke: RasterStroke, width: number, height: number): boolean {
+  const start = stroke.points[0];
+  const end = stroke.points.at(-1);
+  if (!start || !end) return false;
+  if (stroke.preset === "focus-line") {
+    const radius = Math.max(width, height) * 1.1;
+    const gap = Math.max(18, Math.hypot(end.x - start.x, end.y - start.y) * 0.22);
+    for (let index = 0; index < 28; index += 1) {
+      const angle = (Math.PI * 2 * index) / 28;
+      const lengthVariation = 0.72 + ((index * 17) % 9) / 30;
+      ctx.beginPath();
+      ctx.moveTo(end.x + Math.cos(angle) * radius * lengthVariation, end.y + Math.sin(angle) * radius * lengthVariation);
+      ctx.lineTo(end.x + Math.cos(angle) * gap, end.y + Math.sin(angle) * gap);
+      ctx.stroke();
+    }
+    return true;
+  }
+  if (stroke.preset === "speed-line") {
+    const dx = end.x - start.x;
+    const dy = end.y - start.y;
+    const length = Math.max(1, Math.hypot(dx, dy));
+    const perpendicularX = -dy / length;
+    const perpendicularY = dx / length;
+    for (let index = -5; index <= 5; index += 1) {
+      const offset = index * Math.max(5, stroke.size * 1.8);
+      const inset = Math.abs(index % 3) * length * 0.04;
+      ctx.beginPath();
+      ctx.moveTo(start.x + perpendicularX * offset + (dx / length) * inset, start.y + perpendicularY * offset + (dy / length) * inset);
+      ctx.lineTo(end.x + perpendicularX * offset - (dx / length) * inset, end.y + perpendicularY * offset - (dy / length) * inset);
+      ctx.stroke();
+    }
+    return true;
+  }
+  if (stroke.preset === "effect-line") {
+    for (let offset = -1; offset <= 1; offset += 1) {
+      ctx.globalAlpha = stroke.opacity * (offset === 0 ? 1 : 0.35);
+      drawPolyline(ctx, stroke.points.map((point, index) => ({ ...point, y: point.y + offset * (2 + (index % 3)) })));
+    }
+    return true;
+  }
+  return false;
+}
+
+function drawBrushStroke(ctx: CanvasRenderingContext2D, stroke: RasterStroke, width: number, height: number): void {
   const preset = brushPreset(stroke.preset);
   const points = stroke.points;
   if (!points.length) return;
@@ -77,6 +257,8 @@ function drawBrushStroke(ctx: CanvasRenderingContext2D, stroke: RasterStroke): v
   ctx.fillStyle = stroke.color;
   ctx.lineWidth = size;
   ctx.globalAlpha = Math.min(1, Math.max(0, stroke.opacity * preset.opacity));
+
+  if (drawMangaEffectStroke(ctx, stroke, width, height)) return;
 
   if (preset.engine === "eraser") {
     for (const point of points) drawSoftStamp(ctx, point, size, "#000000", stroke.opacity * preset.opacity, preset.hardness);
@@ -130,13 +312,49 @@ function drawShape(ctx: CanvasRenderingContext2D, stroke: RasterStroke): void {
     return;
   }
   if (stroke.kind === "polygon") {
-    drawPolyline(ctx, stroke.points);
+    const centerX = x + width / 2;
+    const centerY = y + height / 2;
+    const outerX = Math.max(1, width / 2);
+    const outerY = Math.max(1, height / 2);
+    const isStar = stroke.preset === "star";
+    const vertices = isStar ? 10 : 6;
+    ctx.beginPath();
+    for (let index = 0; index < vertices; index += 1) {
+      const angle = -Math.PI / 2 + (Math.PI * 2 * index) / vertices;
+      const inner = isStar && index % 2 === 1;
+      const pointX = centerX + Math.cos(angle) * outerX * (inner ? 0.45 : 1);
+      const pointY = centerY + Math.sin(angle) * outerY * (inner ? 0.45 : 1);
+      if (index === 0) ctx.moveTo(pointX, pointY);
+      else ctx.lineTo(pointX, pointY);
+    }
+    ctx.closePath();
+    ctx.stroke();
+    return;
+  }
+  if (stroke.preset === "rounded-rectangle") {
+    const radius = Math.min(24, width / 4, height / 4);
+    ctx.beginPath();
+    ctx.moveTo(x + radius, y);
+    ctx.lineTo(x + width - radius, y);
+    ctx.quadraticCurveTo(x + width, y, x + width, y + radius);
+    ctx.lineTo(x + width, y + height - radius);
+    ctx.quadraticCurveTo(x + width, y + height, x + width - radius, y + height);
+    ctx.lineTo(x + radius, y + height);
+    ctx.quadraticCurveTo(x, y + height, x, y + height - radius);
+    ctx.lineTo(x, y + radius);
+    ctx.quadraticCurveTo(x, y, x + radius, y);
+    ctx.closePath();
+    ctx.stroke();
     return;
   }
   ctx.strokeRect(x, y, width, height);
 }
 
 function drawSpecialStroke(ctx: CanvasRenderingContext2D, stroke: RasterStroke, width: number, height: number): void {
+  if (stroke.kind === "bucket" || stroke.kind === "erase-fill") {
+    floodFill(ctx, stroke, width, height, stroke.kind === "erase-fill");
+    return;
+  }
   if (stroke.kind === "fill") {
     ctx.globalCompositeOperation = stroke.blendMode;
     ctx.globalAlpha = stroke.opacity;
@@ -158,38 +376,93 @@ function drawSpecialStroke(ctx: CanvasRenderingContext2D, stroke: RasterStroke, 
 }
 
 export function drawStroke(ctx: CanvasRenderingContext2D, stroke: RasterStroke, width: number, height: number): void {
+  if (stroke.kind === "bucket" || stroke.kind === "erase-fill") {
+    drawSpecialStroke(ctx, stroke, width, height);
+    return;
+  }
   withSelection(ctx, stroke.selection, () => {
     if (stroke.kind === "fill" || stroke.kind === "gradient") drawSpecialStroke(ctx, stroke, width, height);
-    else if (stroke.kind === "stroke") drawBrushStroke(ctx, stroke);
+    else if (stroke.kind === "stroke") drawBrushStroke(ctx, stroke, width, height);
     else drawShape(ctx, stroke);
   });
 }
 
-function orderedRasterLayers(page: MangaPage): RasterLayer[] {
-  const byId = new Map(page.rasterLayers.map((layer) => [layer.id, layer]));
-  const ordered = page.layerOrder.map((id) => byId.get(id)).filter((layer): layer is RasterLayer => layer !== undefined);
-  return [...ordered, ...page.rasterLayers.filter((layer) => !page.layerOrder.includes(layer.id))];
-}
-
-export function renderRasterLayers(canvas: HTMLCanvasElement, page: MangaPage, preview?: RasterStroke | null): void {
+function initializeCanvas(canvas: HTMLCanvasElement, page: MangaPage): CanvasRenderingContext2D | null {
   const width = Math.max(1, Math.round(page.width));
   const height = Math.max(1, Math.round(page.height));
   if (canvas.width !== width) canvas.width = width;
   if (canvas.height !== height) canvas.height = height;
   const ctx = canvas.getContext("2d");
+  ctx?.clearRect(0, 0, width, height);
+  return ctx;
+}
+
+function drawAlphaLockedStroke(ctx: CanvasRenderingContext2D, stroke: RasterStroke, width: number, height: number): void {
+  if (!stroke.preserveAlpha || stroke.blendMode === "destination-out") {
+    drawStroke(ctx, stroke, width, height);
+    return;
+  }
+  const scratch = document.createElement("canvas");
+  scratch.width = width;
+  scratch.height = height;
+  const scratchCtx = scratch.getContext("2d");
+  if (!scratchCtx) return;
+  drawStroke(scratchCtx, stroke, width, height);
+  ctx.save();
+  ctx.globalAlpha = 1;
+  ctx.globalCompositeOperation = "source-atop";
+  ctx.drawImage(scratch, 0, 0);
+  ctx.restore();
+}
+
+function applyLayerMask(canvas: HTMLCanvasElement, ctx: CanvasRenderingContext2D, layer: RasterLayer): void {
+  const mask = layer.mask;
+  if (!mask?.enabled) return;
+  const maskCanvas = document.createElement("canvas");
+  maskCanvas.width = canvas.width;
+  maskCanvas.height = canvas.height;
+  const maskContext = maskCanvas.getContext("2d");
+  if (!maskContext) return;
+  if (mask.inverted) {
+    maskContext.fillStyle = "#000000";
+    maskContext.fillRect(0, 0, maskCanvas.width, maskCanvas.height);
+    maskContext.globalCompositeOperation = "destination-out";
+  } else {
+    maskContext.fillStyle = "#000000";
+  }
+  selectionPath(maskContext, mask.selection);
+  maskContext.fill();
+  ctx.save();
+  ctx.globalAlpha = 1;
+  ctx.globalCompositeOperation = "destination-in";
+  ctx.drawImage(maskCanvas, 0, 0);
+  ctx.restore();
+}
+
+export function renderRasterLayer(canvas: HTMLCanvasElement, page: MangaPage, layer: RasterLayer, preview?: RasterStroke | null): void {
+  const issue = rasterDimensionError(page.width, page.height);
+  if (issue) throw new Error(issue);
+  const ctx = initializeCanvas(canvas, page);
+  if (!ctx || layer.hidden) return;
+  for (const stroke of layer.strokes) drawAlphaLockedStroke(ctx, stroke, canvas.width, canvas.height);
+  if (preview) drawAlphaLockedStroke(ctx, preview, canvas.width, canvas.height);
+  applyLayerMask(canvas, ctx, layer);
+}
+
+export function renderRasterLayers(canvas: HTMLCanvasElement, page: MangaPage, preview?: RasterStroke | null): void {
+  const issue = rasterDimensionError(page.width, page.height);
+  if (issue) throw new Error(issue);
+  const ctx = initializeCanvas(canvas, page);
   if (!ctx) return;
-  ctx.clearRect(0, 0, width, height);
-  for (const layer of orderedRasterLayers(page)) {
+  const layers = orderedPageLayers(page).filter(isRasterLayer);
+  for (const [index, layer] of layers.entries()) {
     if (layer.hidden) continue;
+    const scratch = document.createElement("canvas");
+    renderRasterLayer(scratch, page, layer, index === layers.length - 1 ? preview : null);
     ctx.save();
     ctx.globalAlpha = layer.opacity;
     ctx.globalCompositeOperation = layer.blendMode;
-    for (const stroke of layer.strokes) drawStroke(ctx, stroke, width, height);
-    ctx.restore();
-  }
-  if (preview) {
-    ctx.save();
-    drawStroke(ctx, preview, width, height);
+    ctx.drawImage(scratch, 0, 0);
     ctx.restore();
   }
 }

@@ -7,7 +7,8 @@ import type {
   TextElement,
   MangaProject,
 } from "./types";
-import { renderRasterLayers } from "./editor/raster";
+import { renderRasterLayer } from "./editor/raster";
+import { isRasterLayer, orderedPageLayers } from "./editor/layers";
 
 export type ExportFormat = "png" | "jpg" | "pdf" | "cbz" | "zip" | "webtoon";
 export type ExportScope = "page" | "chapter" | "volume" | "project";
@@ -17,6 +18,7 @@ export interface ExportOptions {
   scope?: ExportScope;
   scale?: number;
   maxWebtoonHeight?: number;
+  backgroundColor?: string | null;
   signal?: AbortSignal;
   onProgress?: (completed: number, total: number) => void;
 }
@@ -170,6 +172,11 @@ function drawTextBlock(
     padding: number;
     letterSpacing?: number;
     verticalCenter?: boolean;
+    writingMode?: "horizontal" | "vertical";
+    outlineColor?: string;
+    outlineWidth?: number;
+    shadowColor?: string;
+    shadowBlur?: number;
   },
 ): void {
   const {
@@ -184,10 +191,44 @@ function drawTextBlock(
     lineHeight,
     padding,
     verticalCenter = false,
+    writingMode = "horizontal",
+    outlineColor = "transparent",
+    outlineWidth = 0,
+    shadowColor = "transparent",
+    shadowBlur = 0,
   } = options;
 
   ctx.fillStyle = color;
+  ctx.strokeStyle = outlineColor;
+  ctx.lineWidth = outlineWidth * 2;
+  ctx.lineJoin = "round";
+  ctx.shadowColor = shadowColor;
+  ctx.shadowBlur = shadowBlur;
   ctx.font = `${fontWeight} ${fontSize}px ${fontFamily}`;
+  if (writingMode === "vertical") {
+    const columns = text.split("\n");
+    const step = fontSize * lineHeight;
+    let x = width - padding - fontSize / 2;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "top";
+    for (const column of columns) {
+      let y = padding;
+      for (const character of [...column]) {
+        if (outlineWidth > 0) ctx.strokeText(character, x, y);
+        ctx.fillText(character, x, y);
+        y += step;
+        if (y > height - padding) {
+          x -= step;
+          y = padding;
+        }
+      }
+      x -= step;
+      if (x < padding) break;
+    }
+    ctx.shadowColor = "transparent";
+    ctx.shadowBlur = 0;
+    return;
+  }
   ctx.textAlign = align;
   ctx.textBaseline = "top";
   const lines = wrapText(ctx, text, Math.max(12, width - padding * 2));
@@ -197,10 +238,13 @@ function drawTextBlock(
   const x = alignX(align, width, padding);
 
   for (const line of lines) {
+    if (outlineWidth > 0) ctx.strokeText(line, x, y, Math.max(12, width - padding * 2));
     ctx.fillText(line, x, y, Math.max(12, width - padding * 2));
     y += step;
     if (y > height - padding) break;
   }
+  ctx.shadowColor = "transparent";
+  ctx.shadowBlur = 0;
 }
 
 function drawTextElement(ctx: CanvasRenderingContext2D, element: TextElement): void {
@@ -216,6 +260,11 @@ function drawTextElement(ctx: CanvasRenderingContext2D, element: TextElement): v
     lineHeight: element.lineHeight,
     padding: 4,
     letterSpacing: element.letterSpacing,
+    writingMode: element.writingMode,
+    outlineColor: element.outlineColor,
+    outlineWidth: element.outlineWidth,
+    shadowColor: element.shadowColor,
+    shadowBlur: element.shadowBlur,
   });
 }
 
@@ -344,7 +393,7 @@ async function drawElement(ctx: CanvasRenderingContext2D, element: MangaElement,
   ctx.restore();
 }
 
-export async function renderPageBlob(page: MangaPage, scale = 2, mimeType: "image/png" | "image/jpeg" = "image/png", signal?: AbortSignal): Promise<Blob> {
+export async function renderPageBlob(page: MangaPage, scale = 2, mimeType: "image/png" | "image/jpeg" = "image/png", signal?: AbortSignal, backgroundColor: string | null | undefined = undefined): Promise<Blob> {
   const canvas = document.createElement("canvas");
   canvas.width = Math.round(page.width * scale);
   canvas.height = Math.round(page.height * scale);
@@ -352,19 +401,26 @@ export async function renderPageBlob(page: MangaPage, scale = 2, mimeType: "imag
   if (!ctx) throw new Error("เบราว์เซอร์ไม่รองรับ Canvas 2D");
 
   ctx.scale(scale, scale);
-  ctx.fillStyle = page.background;
-  ctx.fillRect(0, 0, page.width, page.height);
-
-  if (page.rasterLayers.length) {
-    const rasterCanvas = document.createElement("canvas");
-    renderRasterLayers(rasterCanvas, page);
-    ctx.drawImage(rasterCanvas, 0, 0, page.width, page.height);
+  const effectiveBackground = backgroundColor === undefined ? page.background : backgroundColor;
+  if (effectiveBackground !== null) {
+    ctx.fillStyle = effectiveBackground;
+    ctx.fillRect(0, 0, page.width, page.height);
   }
 
-  for (const element of page.elements) {
-    if (element.parentId) continue;
+  for (const layer of orderedPageLayers(page)) {
     if (signal?.aborted) throw new DOMException("Export cancelled", "AbortError");
-    await drawElement(ctx, element, page);
+    if (isRasterLayer(layer)) {
+      if (layer.hidden) continue;
+      const rasterCanvas = document.createElement("canvas");
+      renderRasterLayer(rasterCanvas, page, layer);
+      ctx.save();
+      ctx.globalAlpha = layer.opacity;
+      ctx.globalCompositeOperation = layer.blendMode;
+      ctx.drawImage(rasterCanvas, 0, 0, page.width, page.height);
+      ctx.restore();
+      continue;
+    }
+    if (!layer.parentId) await drawElement(ctx, layer, page);
   }
 
   return new Promise<Blob>((resolve, reject) => {
@@ -432,7 +488,7 @@ function concatBytes(chunks: Uint8Array[]): Uint8Array {
   return result;
 }
 
-function zipStore(entries: ArchiveEntry[]): Blob {
+export function createStoreZip(entries: ArchiveEntry[]): Blob {
   const encoder = new TextEncoder();
   const local: Uint8Array[] = [];
   const central: Uint8Array[] = [];
@@ -468,7 +524,7 @@ function ascii(value: string): Uint8Array {
   return new TextEncoder().encode(value);
 }
 
-async function createPdf(pages: Array<{ page: MangaPage; blob: Blob; width: number; height: number }>): Promise<Blob> {
+export async function createPdfDocument(pages: Array<{ page: MangaPage; blob: Blob; width: number; height: number }>): Promise<Blob> {
   const objects: Uint8Array[] = [];
   const pageReferences: number[] = [];
   const pagesObject = 2;
@@ -503,7 +559,7 @@ async function createPdf(pages: Array<{ page: MangaPage; blob: Blob; width: numb
   return new Blob(chunks, { type: "application/pdf" });
 }
 
-function pagesForScope(project: MangaProject, scope: ExportScope): MangaPage[] {
+export function pagesForScope(project: MangaProject, scope: ExportScope): MangaPage[] {
   if (scope === "page") return [project.pages.find((page) => page.id === project.activePageId) ?? project.pages[0]!];
   if (scope === "chapter") {
     const chapter = project.chapters.find((item) => item.id === project.activeChapterId);
@@ -517,56 +573,109 @@ function pagesForScope(project: MangaProject, scope: ExportScope): MangaPage[] {
   return [...project.pages].sort((a, b) => a.order - b.order);
 }
 
-async function createWebtoonBlobs(pages: Array<{ page: MangaPage; blob: Blob }>, scale: number, maxHeight: number, signal?: AbortSignal): Promise<Blob[]> {
-  const images = await Promise.all(pages.map(async ({ page, blob }) => ({ page, image: await loadImage(URL.createObjectURL(blob)) })));
-  const results: Blob[] = [];
-  let current = document.createElement("canvas");
-  current.width = Math.max(...images.map((item) => Math.round(item.page.width * scale)));
-  current.height = maxHeight;
-  let ctx = current.getContext("2d");
-  if (!ctx) throw new Error("เบราว์เซอร์ไม่รองรับ Canvas 2D");
-  let y = 0;
-  for (const item of images) {
-    if (signal?.aborted) throw new DOMException("Export cancelled", "AbortError");
-    const height = Math.round(item.page.height * scale);
-    if (y > 0 && y + height > maxHeight) {
-      const blob = await canvasToPng(current, y);
-      results.push(blob);
-      current = document.createElement("canvas");
-      current.width = Math.max(...images.map((candidate) => Math.round(candidate.page.width * scale)));
-      current.height = maxHeight;
-      ctx = current.getContext("2d");
-      if (!ctx) throw new Error("เบราว์เซอร์ไม่รองรับ Canvas 2D");
-      y = 0;
+export interface WebtoonSlice {
+  parts: Array<{ pageIndex: number; sourceY: number; height: number }>;
+  height: number;
+}
+
+export function planWebtoonSlices(heights: readonly number[], maxHeight: number): WebtoonSlice[] {
+  const limit = Math.max(1, Math.floor(maxHeight));
+  const slices: WebtoonSlice[] = [];
+  let current: WebtoonSlice = { parts: [], height: 0 };
+  heights.forEach((rawHeight, pageIndex) => {
+    const itemHeight = Math.max(1, Math.round(rawHeight));
+    let sourceY = 0;
+    while (sourceY < itemHeight) {
+      const available = limit - current.height;
+      const height = Math.min(available, itemHeight - sourceY);
+      current.parts.push({ pageIndex, sourceY, height });
+      current.height += height;
+      sourceY += height;
+      if (current.height >= limit) {
+        slices.push(current);
+        current = { parts: [], height: 0 };
+      }
     }
-    ctx.drawImage(item.image, 0, y, Math.round(item.page.width * scale), height);
-    y += height;
+  });
+  if (current.parts.length) slices.push(current);
+  return slices;
+}
+
+export function backgroundForExport(format: ExportFormat, requested: string | null | undefined): string | null | undefined {
+  if (requested !== undefined) return requested;
+  return format === "jpg" || format === "pdf" || format === "cbz" ? "#ffffff" : undefined;
+}
+
+async function createWebtoonBlobs(pages: Array<{ page: MangaPage; blob: Blob }>, scale: number, maxHeight: number, signal?: AbortSignal): Promise<Blob[]> {
+  const images = await Promise.all(pages.map(async ({ page, blob }) => {
+    const url = URL.createObjectURL(blob);
+    try {
+      return { page, image: await loadImage(url), url };
+    } catch (error) {
+      URL.revokeObjectURL(url);
+      throw error;
+    }
+  }));
+  try {
+    const outputWidth = Math.max(...images.map((item) => Math.round(item.page.width * scale)));
+    const slices = planWebtoonSlices(images.map((item) => Math.round(item.page.height * scale)), maxHeight);
+    const results: Blob[] = [];
+    for (const slice of slices) {
+      if (signal?.aborted) throw new DOMException("Export cancelled", "AbortError");
+      const canvas = document.createElement("canvas");
+      canvas.width = outputWidth;
+      canvas.height = slice.height;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) throw new Error("เบราว์เซอร์ไม่รองรับ Canvas 2D");
+      let y = 0;
+      for (const part of slice.parts) {
+        const item = images[part.pageIndex];
+        if (!item) continue;
+        const itemWidth = Math.round(item.page.width * scale);
+        ctx.drawImage(item.image, 0, part.sourceY, itemWidth, part.height, 0, y, itemWidth, part.height);
+        y += part.height;
+      }
+      results.push(await canvasToPng(canvas, slice.height));
+    }
+    return results;
+  } finally {
+    images.forEach((item) => URL.revokeObjectURL(item.url));
   }
-  if (y > 0) results.push(await canvasToPng(current, y));
-  return results;
 }
 
 async function createWebtoonLongStripBlob(pages: Array<{ page: MangaPage; blob: Blob }>, scale: number, signal?: AbortSignal): Promise<Blob> {
-  const images = await Promise.all(pages.map(async ({ page, blob }) => ({ page, image: await loadImage(URL.createObjectURL(blob)) })));
-  const width = Math.max(...images.map((item) => Math.round(item.page.width * scale)));
-  const height = images.reduce((total, item) => total + Math.round(item.page.height * scale), 0);
-  if (width * height > 50_000_000 || height > 32_000) throw new Error("ภาพ Webtoon ยาวเกินขนาด Canvas ของเบราว์เซอร์ ให้ใช้ sliced ZIP แทน");
-  const canvas = document.createElement("canvas");
-  canvas.width = width;
-  canvas.height = height;
-  const ctx = canvas.getContext("2d");
-  if (!ctx) throw new Error("เบราว์เซอร์ไม่รองรับ Canvas 2D");
-  ctx.fillStyle = "#ffffff";
-  ctx.fillRect(0, 0, width, height);
-  let y = 0;
-  for (const item of images) {
-    if (signal?.aborted) throw new DOMException("Export cancelled", "AbortError");
-    const itemWidth = Math.round(item.page.width * scale);
-    const itemHeight = Math.round(item.page.height * scale);
-    ctx.drawImage(item.image, 0, y, itemWidth, itemHeight);
-    y += itemHeight;
+  const images = await Promise.all(pages.map(async ({ page, blob }) => {
+    const url = URL.createObjectURL(blob);
+    try {
+      return { page, image: await loadImage(url), url };
+    } catch (error) {
+      URL.revokeObjectURL(url);
+      throw error;
+    }
+  }));
+  try {
+    const width = Math.max(...images.map((item) => Math.round(item.page.width * scale)));
+    const height = images.reduce((total, item) => total + Math.round(item.page.height * scale), 0);
+    if (width * height > 50_000_000 || height > 32_000) throw new Error("ภาพ Webtoon ยาวเกินขนาด Canvas ของเบราว์เซอร์ ให้ใช้ sliced ZIP แทน");
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) throw new Error("เบราว์เซอร์ไม่รองรับ Canvas 2D");
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, width, height);
+    let y = 0;
+    for (const item of images) {
+      if (signal?.aborted) throw new DOMException("Export cancelled", "AbortError");
+      const itemWidth = Math.round(item.page.width * scale);
+      const itemHeight = Math.round(item.page.height * scale);
+      ctx.drawImage(item.image, 0, y, itemWidth, itemHeight);
+      y += itemHeight;
+    }
+    return canvasToPng(canvas, height);
+  } finally {
+    images.forEach((item) => URL.revokeObjectURL(item.url));
   }
-  return canvasToPng(canvas, height);
 }
 
 async function canvasToPng(canvas: HTMLCanvasElement, height: number): Promise<Blob> {
@@ -584,31 +693,39 @@ export async function exportProject(project: MangaProject, filename: string, opt
   const scale = Math.max(0.25, options.scale ?? 2);
   const total = pages.length;
   const rendered: Array<{ page: MangaPage; blob: Blob }> = [];
+  const exportBackground = backgroundForExport(options.format, options.backgroundColor);
   for (const [index, page] of pages.entries()) {
     if (options.signal?.aborted) throw new DOMException("Export cancelled", "AbortError");
-    const blob = await renderPageBlob(page, scale, options.format === "jpg" || options.format === "pdf" ? "image/jpeg" : "image/png", options.signal);
+    const blob = await renderPageBlob(page, scale, options.format === "jpg" || options.format === "pdf" ? "image/jpeg" : "image/png", options.signal, exportBackground);
     rendered.push({ page, blob });
     options.onProgress?.(index + 1, total);
   }
   const base = safeFilename(filename);
   if (options.format === "png" || options.format === "jpg") {
     if (rendered.length === 1) downloadBlobFile(rendered[0]!.blob, `${base}.${options.format}`);
-    else downloadBlobFile(zipStore(await Promise.all(rendered.map(async ({ page, blob }, index) => ({ name: `${String(index + 1).padStart(3, "0")}-${safeFilename(page.name)}.${options.format}`, data: new Uint8Array(await blob.arrayBuffer()) })))), `${base}.zip`);
+    else downloadBlobFile(createStoreZip(await Promise.all(rendered.map(async ({ page, blob }, index) => ({ name: `${String(index + 1).padStart(3, "0")}-${safeFilename(page.name)}.${options.format}`, data: new Uint8Array(await blob.arrayBuffer()) })))), `${base}.zip`);
     return;
   }
   if (options.format === "webtoon") {
-    const longStrip = await createWebtoonLongStripBlob(rendered, scale, options.signal);
+    let longStrip: Blob | null = null;
+    try {
+      longStrip = await createWebtoonLongStripBlob(rendered, scale, options.signal);
+    } catch (error) {
+      if (!(error instanceof Error) || !error.message.includes("ยาวเกินขนาด Canvas")) throw error;
+    }
     const blobs = await createWebtoonBlobs(rendered, scale, options.maxWebtoonHeight ?? 8000, options.signal);
-    const entries = [{ name: `${base}-long.png`, data: new Uint8Array(await longStrip.arrayBuffer()) }, ...await Promise.all(blobs.map(async (blob, index) => ({ name: `${base}-${String(index + 1).padStart(2, "0")}.png`, data: new Uint8Array(await blob.arrayBuffer()) })))];
-    downloadBlobFile(zipStore(entries), `${base}-webtoon.zip`);
+    const entries = await Promise.all(blobs.map(async (blob, index) => ({ name: `${base}-${String(index + 1).padStart(2, "0")}.png`, data: new Uint8Array(await blob.arrayBuffer()) })));
+    if (longStrip) entries.unshift({ name: `${base}-long.png`, data: new Uint8Array(await longStrip.arrayBuffer()) });
+    else entries.unshift({ name: "README.txt", data: ascii("Long-strip PNG was omitted because it exceeded browser Canvas limits. Sliced PNG files are complete.") });
+    downloadBlobFile(createStoreZip(entries), `${base}-webtoon.zip`);
     return;
   }
   if (options.format === "pdf") {
-    const pdf = await createPdf(rendered.map(({ page, blob }) => ({ page, blob, width: Math.round(page.width * scale), height: Math.round(page.height * scale) })));
+    const pdf = await createPdfDocument(rendered.map(({ page, blob }) => ({ page, blob, width: Math.round(page.width * scale), height: Math.round(page.height * scale) })));
     downloadBlobFile(pdf, `${base}.pdf`);
     return;
   }
   const entries = await Promise.all(rendered.map(async ({ page, blob }, index) => ({ name: `pages/${String(index + 1).padStart(3, "0")}-${safeFilename(page.name)}.png`, data: new Uint8Array(await blob.arrayBuffer()) })));
   entries.unshift({ name: "project.json", data: ascii(JSON.stringify({ id: project.id, name: project.name, schemaVersion: project.schemaVersion, pageIds: pages.map((page) => page.id) }, null, 2)) });
-  downloadBlobFile(zipStore(entries), `${base}.${options.format}`);
+  downloadBlobFile(createStoreZip(entries), `${base}.${options.format}`);
 }

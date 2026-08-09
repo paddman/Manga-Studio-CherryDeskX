@@ -2,6 +2,34 @@ import type { ToolId } from "../types";
 
 export type ToolCapability = "ready" | "experimental" | "disabled" | "adapter";
 
+export type ToolEngine =
+  | "element-select"
+  | "viewport-pan"
+  | "viewport-zoom"
+  | "selection-rectangle"
+  | "selection-ellipse"
+  | "selection-lasso"
+  | "selection-polygon"
+  | "raster-brush"
+  | "raster-eraser"
+  | "raster-fill"
+  | "raster-bucket"
+  | "raster-bucket-erase"
+  | "raster-gradient"
+  | "raster-shape"
+  | "element-rotate"
+  | "element-flip"
+  | "color-sample"
+  | "text-create"
+  | "panel-create"
+  | "bubble-create"
+  | "bubble-tail"
+  | "grid-toggle"
+  | "image-crop"
+  | "raster-alpha-lock"
+  | "raster-layer-mask"
+  | "asset-library";
+
 export type ToolGroup =
   | "navigation"
   | "selection"
@@ -28,6 +56,7 @@ export interface ToolDefinition {
   labelTh: string;
   labelEn: string;
   capability: ToolCapability;
+  engine?: ToolEngine;
   shortcut?: string;
   reason?: string;
   phase?: string;
@@ -102,34 +131,59 @@ export const TOOL_CATALOG: readonly ToolSeed[] = [
   ]),
 ];
 
-const READY = new Set([
-  "select", "hand", "zoom", "rectangular-marquee", "elliptical-marquee", "lasso", "polygonal-lasso", "selection-pen", "selection-eraser", "auto-select", "layer-select",
-  "brush", "pencil", "pen", "g-pen", "real-g-pen", "mapping-pen", "turnip-pen", "calligraphy-pen", "marker", "airbrush", "spray", "watercolor-brush", "oil-paint-brush", "gouache-brush", "pastel", "chalk", "charcoal", "crayon", "pixel-brush", "mixer-brush", "blend", "smudge", "decoration-brush", "pattern-brush", "texture-brush",
-  "eraser", "hard-eraser", "soft-eraser", "kneaded-eraser", "background-eraser", "fill", "paint-bucket", "gradient", "contiguous-fill", "enclose-fill", "close-fill", "lasso-fill", "line", "polyline", "curve", "rectangle", "rounded-rectangle", "ellipse", "polygon", "star", "free-transform", "scale", "rotate", "flip", "skew", "eyedropper", "color-picker", "color-slider", "swatch", "text", "horizontal-type", "vertical-type", "text-box", "frame-border", "panel-cutter", "divide-frame", "speech-balloon", "thought-balloon", "jagged-balloon", "balloon-tail", "manga-tone", "screentone", "focus-line", "speed-line", "effect-line", "straight-ruler", "guide", "grid", "crop", "measure", "ruler", "color-sampler", "layer-mask", "quick-mask", "alpha-lock", "reference-image", "asset", "history", "snapshot", "export-preview", "print-preview",
-]);
-
 const EXPERIMENTAL = new Set([
   "magic-wand", "quick-selection", "magnetic-lasso", "shape-builder", "custom-shape", "gradient-tone", "stream-line", "saturated-line", "perspective-transform", "perspective-ruler", "symmetry-ruler", "sub-view", "compare-view",
+  "mixer-brush", "blend", "smudge", "decoration-brush", "pattern-brush", "texture-brush", "focus-line", "speed-line", "effect-line", "background-eraser", "magic-eraser",
 ]);
 
 const ADAPTERS = new Set(["select-subject", "object-selection", "content-aware-fill", "content-aware-scale", "remove", "spot-healing", "healing-brush", "patch", "frequency-separation", "3d-object", "3d-pose", "3d-camera", "3d-light", "pose-scanner", "hand-scanner", "timeline", "keyframe", "cel", "animation-folder", "onion-skin-animation", "inbetween", "camera-movement", "audio-track", "batch-process", "auto-action"]);
 
 const PHASE_TWO = new Set(["vector-eraser", "magic-eraser", "refer-other-layers-fill", "pattern-fill", "bezier-curve", "continuous-curve", "vector-pen", "edit-path", "node", "direct-selection", "path-selection", "add-anchor-point", "delete-anchor-point", "convert-point", "correct-line", "simplify-line", "connect-line", "pinch-vector-line", "adjust-line-width", "redraw-vector-line", "vector-magnet", "distort", "warp", "mesh-transform", "puppet-warp", "liquify", "clone-stamp", "pattern-stamp", "red-eye", "blur", "sharpen", "retouch-smudge", "dodge", "burn", "sponge", "color-wheel", "color-mixer", "gradient-map", "replace-color", "colorize", "type-on-path", "font-preview", "text-warp", "curve-ruler", "figure-ruler", "parallel-line-ruler", "parallel-curve-ruler", "multiple-curve-ruler", "radial-line-ruler", "radial-curve-ruler", "radial-line-ruler", "radial-curve-ruler", "special-ruler", "perspective-crop", "slice", "count", "note", "clipping-mask", "vector-mask", "gradient-mask", "auto-layer-select", "light-table", "onion-skin-reference", "material"]);
-const NO_BEHAVIOR_YET = new Set(["free-transform", "scale", "skew", "color-slider", "swatch", "manga-tone", "screentone", "gradient-tone", "straight-ruler", "measure", "ruler", "layer-mask", "quick-mask", "reference-image", "history", "snapshot", "export-preview", "print-preview"]);
+const BRUSH_ENGINES = new Set(["brush", "pencil", "pen", "g-pen", "real-g-pen", "mapping-pen", "turnip-pen", "calligraphy-pen", "marker", "airbrush", "spray", "watercolor-brush", "oil-paint-brush", "gouache-brush", "pastel", "chalk", "charcoal", "crayon", "pixel-brush", "mixer-brush", "blend", "smudge", "decoration-brush", "pattern-brush", "texture-brush", "focus-line", "speed-line", "effect-line"]);
+const ERASER_ENGINES = new Set(["eraser", "hard-eraser", "soft-eraser", "kneaded-eraser"]);
+const SHAPE_ENGINES = new Set(["line", "polyline", "curve", "rectangle", "rounded-rectangle", "ellipse", "polygon", "star"]);
 
-function capability(id: string): Pick<ToolDefinition, "capability" | "reason" | "phase"> {
-  if (NO_BEHAVIOR_YET.has(id)) return { capability: "disabled", reason: "เครื่องมือถูกแสดงไว้ใน catalog แล้ว แต่ยังไม่มี interaction ที่สมบูรณ์", phase: "Foundation follow-up" };
-  if (READY.has(id)) return { capability: "ready" };
-  if (EXPERIMENTAL.has(id)) return { capability: "experimental", reason: "local engine ยังอยู่ระหว่างปรับความแม่นยำ", phase: "Foundation" };
-  if (ADAPTERS.has(id)) return { capability: "adapter", reason: "ต้องเชื่อม backend หรือ engine ภายนอกก่อน", phase: "AI / Cloud" };
-  return { capability: "disabled", reason: "ยังไม่มี local engine ที่ผ่าน acceptance test", phase: PHASE_TWO.has(id) ? "Vector & Advanced" : "Future" };
+function engineFor(id: string): ToolEngine | undefined {
+  if (id === "select" || id === "auto-select" || id === "layer-select") return "element-select";
+  if (id === "hand") return "viewport-pan";
+  if (id === "zoom") return "viewport-zoom";
+  if (id === "rectangular-marquee") return "selection-rectangle";
+  if (id === "elliptical-marquee") return "selection-ellipse";
+  if (id === "lasso" || id === "selection-pen") return "selection-lasso";
+  if (id === "polygonal-lasso") return "selection-polygon";
+  if (BRUSH_ENGINES.has(id)) return "raster-brush";
+  if (ERASER_ENGINES.has(id)) return "raster-eraser";
+  if (id === "background-eraser" || id === "magic-eraser") return "raster-bucket-erase";
+  if (id === "fill" || id === "lasso-fill") return "raster-fill";
+  if (id === "paint-bucket" || id === "contiguous-fill") return "raster-bucket";
+  if (id === "gradient") return "raster-gradient";
+  if (SHAPE_ENGINES.has(id)) return "raster-shape";
+  if (id === "rotate") return "element-rotate";
+  if (id === "flip") return "element-flip";
+  if (id === "eyedropper" || id === "color-picker" || id === "color-sampler") return "color-sample";
+  if (id === "text" || id === "horizontal-type" || id === "vertical-type" || id === "text-box") return "text-create";
+  if (id === "frame-border") return "panel-create";
+  if (id === "speech-balloon" || id === "thought-balloon" || id === "jagged-balloon") return "bubble-create";
+  if (id === "balloon-tail") return "bubble-tail";
+  if (id === "grid") return "grid-toggle";
+  if (id === "crop") return "image-crop";
+  if (id === "alpha-lock") return "raster-alpha-lock";
+  if (id === "layer-mask") return "raster-layer-mask";
+  if (id === "asset") return "asset-library";
+  return undefined;
 }
 
-export const TOOL_DEFINITIONS: readonly ToolDefinition[] = TOOL_CATALOG.map((seed) => ({
-  ...seed,
-  id: seed.id as ToolId,
-  ...capability(seed.id),
-}));
+function capability(id: string, engine: ToolEngine | undefined): Pick<ToolDefinition, "capability" | "reason" | "phase"> {
+  if (ADAPTERS.has(id)) return { capability: "adapter", reason: "ต้องเชื่อม backend หรือ engine ภายนอกก่อน", phase: "AI / Cloud" };
+  if (engine && EXPERIMENTAL.has(id)) return { capability: "experimental", reason: "local engine ยังอยู่ระหว่างปรับความแม่นยำ", phase: "Foundation" };
+  if (engine) return { capability: "ready" };
+  return { capability: "disabled", reason: "มี canonical tool ID แล้ว แต่ยังไม่มี interaction จริงที่ผ่าน acceptance test", phase: PHASE_TWO.has(id) ? "Vector & Advanced" : "Foundation follow-up" };
+}
+
+export const TOOL_DEFINITIONS: readonly ToolDefinition[] = TOOL_CATALOG.map((seed) => {
+  const engine = engineFor(seed.id);
+  return { ...seed, id: seed.id as ToolId, engine, ...capability(seed.id, engine) };
+});
 
 export const TOOL_GROUP_LABELS: Record<ToolGroup, string> = {
   navigation: "Navigation",
@@ -169,8 +223,30 @@ export function canUseTool(id: ToolId): boolean {
   return definition?.capability === "ready" || definition?.capability === "experimental";
 }
 
+export type ToolKeymap = Readonly<Record<string, ToolId>>;
+
+export const DEFAULT_TOOL_KEYMAP: ToolKeymap = Object.freeze({
+  V: toolId("select"),
+  H: toolId("hand"),
+  Z: toolId("zoom"),
+  M: toolId("rectangular-marquee"),
+  L: toolId("lasso"),
+  B: toolId("brush"),
+  E: toolId("eraser"),
+  G: toolId("fill"),
+  U: toolId("line"),
+  Y: toolId("text"),
+  C: toolId("crop"),
+  I: toolId("eyedropper"),
+});
+
+export function resolveToolShortcut(key: string, keymap: ToolKeymap = DEFAULT_TOOL_KEYMAP): ToolId | null {
+  const tool = keymap[key.toUpperCase()];
+  return tool && canUseTool(tool) ? tool : null;
+}
+
 export function isRasterTool(id: ToolId): boolean {
-  return ["brush", "pencil", "pen", "g-pen", "real-g-pen", "mapping-pen", "turnip-pen", "calligraphy-pen", "marker", "airbrush", "spray", "watercolor-brush", "oil-paint-brush", "gouache-brush", "pastel", "chalk", "charcoal", "crayon", "pixel-brush", "mixer-brush", "blend", "smudge", "decoration-brush", "pattern-brush", "texture-brush", "eraser", "hard-eraser", "soft-eraser", "kneaded-eraser", "background-eraser", "line", "polyline", "curve", "rectangle", "rounded-rectangle", "ellipse", "polygon", "star", "fill", "paint-bucket", "gradient", "contiguous-fill", "enclose-fill", "close-fill", "lasso-fill", "focus-line", "speed-line", "effect-line"].includes(id as string);
+  return getToolDefinition(id)?.engine?.startsWith("raster-") ?? false;
 }
 
 export interface BrushPreset {
@@ -211,6 +287,12 @@ export const BRUSH_PRESETS: Record<string, BrushPreset> = {
   "soft-eraser": { id: "soft-eraser", label: "Soft Eraser", engine: "eraser", sizeMultiplier: 1.8, opacity: 0.72, hardness: 0.08, spacing: 0.14 },
   "kneaded-eraser": { id: "kneaded-eraser", label: "Kneaded Eraser", engine: "eraser", sizeMultiplier: 1.6, opacity: 0.4, hardness: 0.3, spacing: 0.18 },
   "background-eraser": { id: "background-eraser", label: "Background Eraser", engine: "eraser", sizeMultiplier: 1.8, opacity: 0.84, hardness: 0.7, spacing: 0.14 },
+  "decoration-brush": { id: "decoration-brush", label: "Decoration", engine: "marker", sizeMultiplier: 1.9, opacity: 0.58, hardness: 0.72, spacing: 0.22 },
+  "pattern-brush": { id: "pattern-brush", label: "Pattern", engine: "spray", sizeMultiplier: 1.55, opacity: 0.62, hardness: 0.75, spacing: 0.3 },
+  "texture-brush": { id: "texture-brush", label: "Texture", engine: "spray", sizeMultiplier: 2.1, opacity: 0.3, hardness: 0.35, spacing: 0.25 },
+  "focus-line": { id: "focus-line", label: "Focus Line", engine: "ink", sizeMultiplier: 0.55, opacity: 0.85, hardness: 1, spacing: 0.1 },
+  "speed-line": { id: "speed-line", label: "Speed Line", engine: "ink", sizeMultiplier: 0.5, opacity: 0.8, hardness: 1, spacing: 0.1 },
+  "effect-line": { id: "effect-line", label: "Effect Line", engine: "ink", sizeMultiplier: 0.8, opacity: 0.75, hardness: 0.9, spacing: 0.1 },
 };
 
 export function brushPreset(id: string): BrushPreset {

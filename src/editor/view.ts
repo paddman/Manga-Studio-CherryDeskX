@@ -12,6 +12,7 @@ import type {
 import { getCropRect } from "./actions";
 import { TOOL_DEFINITIONS, TOOL_GROUP_LABELS, type ToolGroup } from "./tools";
 import { activePage, runtime, selectedElement } from "./state";
+import { isRasterLayer, orderedPageLayers } from "./layers";
 
 function escapeHtml(value: string): string {
   return value
@@ -151,7 +152,7 @@ function renderAssetsPanel(): string {
   const selected = selectedElement();
   const cards = runtime.project.assets
     .map(
-      (asset) => `<button class="asset-card" data-add-asset="${asset.id}" title="เพิ่ม ${escapeHtml(asset.name)} ลงหน้า"><img src="${asset.src}" alt="${escapeHtml(asset.name)}"/><span>${escapeHtml(asset.name)}</span></button>`,
+      (asset) => `<button class="asset-card" data-add-asset="${escapeHtml(asset.id)}" title="เพิ่ม ${escapeHtml(asset.name)} ลงหน้า"><img src="${escapeHtml(asset.src)}" alt="${escapeHtml(asset.name)}"/><span>${escapeHtml(asset.name)}</span></button>`,
     )
     .join("");
   return `
@@ -220,7 +221,13 @@ function renderStage(): string {
   const prefs = runtime.preferences;
   const selected = selectedElement();
   const image = selected?.kind === "image" ? selected : null;
-  const elements = page.elements.filter((element) => !element.parentId).map((element, index) => renderCanvasElement(element, index, page.elements)).join("");
+  const layers = orderedPageLayers(page).map((layer, index) => {
+    if (isRasterLayer(layer)) {
+      const blendMode = layer.blendMode === "source-over" ? "normal" : layer.blendMode;
+      return `<canvas class="raster-canvas" data-raster-canvas data-raster-layer-id="${escapeHtml(layer.id)}" width="${page.width}" height="${page.height}" style="z-index:${index + 1};opacity:${layer.opacity};mix-blend-mode:${blendMode};display:${layer.hidden ? "none" : "block"}"></canvas>`;
+    }
+    return layer.parentId ? "" : renderCanvasElement(layer, index, page.elements);
+  }).join("");
   const guides = runtime.selectionGuides.map((guide) => guide.axis === "x"
     ? `<div class="dynamic-guide guide-x" style="left:${guide.position}px"><span>${guide.label ?? ""}</span></div>`
     : `<div class="dynamic-guide guide-y" style="top:${guide.position}px"><span>${guide.label ?? ""}</span></div>`).join("");
@@ -237,7 +244,7 @@ function renderStage(): string {
         ${image ? `<div class="stage-image-toolbar" aria-label="เครื่องมือแต่งรูป"><strong>แก้ไขรูป</strong><button data-action="enter-crop">${prefs.cropElementId === image.id ? "เสร็จสิ้น Crop" : "เลือกพื้นที่ Crop"}</button><button data-action="replace-image">เปลี่ยนรูป</button><button data-action="reset-image-edits">รีเซ็ต</button></div>` : ""}
         <div class="canvas-sizer" style="width:${Math.round(page.width * prefs.zoom)}px;height:${Math.round(page.height * prefs.zoom)}px">
           <div id="pageCanvas" class="page-canvas ${prefs.showGrid ? "show-grid" : ""}" data-page-canvas style="width:${page.width}px;height:${page.height}px;background:${page.background};transform:scale(${prefs.zoom})">
-            ${prefs.showSafeArea ? `<div class="safe-area"></div>` : ""}<canvas class="raster-canvas" data-raster-canvas width="${page.width}" height="${page.height}"></canvas>${guides}${rectangle}${pixelSelection}${elements}
+            ${prefs.showSafeArea ? `<div class="safe-area"></div>` : ""}${layers}${guides}${rectangle}${pixelSelection}
           </div>
         </div>
       </div>
@@ -269,15 +276,16 @@ function renderCanvasElement(element: MangaElement, index: number, allElements: 
     const crop = getCropRect(element);
     const hasSelection = crop.left > 0.001 || crop.top > 0.001 || crop.width < 0.999 || crop.height < 0.999;
     const image = hasSelection
-      ? `<div class="image-crop-viewport"><img draggable="false" src="${source}" alt="${escapeHtml(element.name)}" style="position:absolute;left:${-(crop.left / crop.width) * 100}%;top:${-(crop.top / crop.height) * 100}%;width:${100 / crop.width}%;height:${100 / crop.height}%;max-width:none;border-radius:${element.borderRadius}px;filter:grayscale(${element.grayscale}%) contrast(${element.contrast}%);transform:none"/></div>`
-      : `<img draggable="false" src="${source}" alt="${escapeHtml(element.name)}" style="object-fit:${element.fit};object-position:${element.crop.x * 100}% ${element.crop.y * 100}%;border-radius:${element.borderRadius}px;filter:grayscale(${element.grayscale}%) contrast(${element.contrast}%);transform:scale(${element.crop.scale})"/>`;
+      ? `<div class="image-crop-viewport"><img draggable="false" src="${escapeHtml(source)}" alt="${escapeHtml(element.name)}" style="position:absolute;left:${-(crop.left / crop.width) * 100}%;top:${-(crop.top / crop.height) * 100}%;width:${100 / crop.width}%;height:${100 / crop.height}%;max-width:none;border-radius:${element.borderRadius}px;filter:grayscale(${element.grayscale}%) contrast(${element.contrast}%);transform:none"/></div>`
+      : `<img draggable="false" src="${escapeHtml(source)}" alt="${escapeHtml(element.name)}" style="object-fit:${element.fit};object-position:${element.crop.x * 100}% ${element.crop.y * 100}%;border-radius:${element.borderRadius}px;filter:grayscale(${element.grayscale}%) contrast(${element.contrast}%);transform:scale(${element.crop.scale})"/>`;
     content = `${image}${runtime.preferences.cropElementId === element.id ? cropOverlay(element) : ""}`;
   }
-  if (element.kind === "text") content = `<div class="text-content" style="color:${element.color};font-size:${element.fontSize}px;font-weight:${element.fontWeight};font-family:${element.fontFamily};text-align:${element.align};line-height:${element.lineHeight};letter-spacing:${element.letterSpacing}px">${escapeHtml(element.text).replaceAll("\n", "<br>")}</div>`;
+  if (element.kind === "text") content = `<div class="text-content" style="color:${element.color};font-size:${element.fontSize}px;font-weight:${element.fontWeight};font-family:${element.fontFamily};text-align:${element.align};line-height:${element.lineHeight};letter-spacing:${element.letterSpacing}px;writing-mode:${element.writingMode === "vertical" ? "vertical-rl" : "horizontal-tb"};-webkit-text-stroke:${element.outlineWidth}px ${element.outlineColor};text-shadow:0 2px ${element.shadowBlur}px ${element.shadowColor}">${escapeHtml(element.text).replaceAll("\n", "<br>")}</div>`;
   if (element.kind === "bubble") {
-    content = `<div class="bubble-shape bubble-${element.variant}" style="--bubble-bg:${element.background};--bubble-color:${element.color};--bubble-border:${element.borderColor};--bubble-border-width:${element.borderWidth}px"><div style="font-size:${element.fontSize}px;font-weight:${element.fontWeight};text-align:${element.align}">${escapeHtml(element.text).replaceAll("\n", "<br>")}</div></div>`;
+    const tail = element.variant === "speech" ? `<svg class="bubble-tail-svg" viewBox="0 0 ${element.width} ${element.height * 1.6}" preserveAspectRatio="none" aria-hidden="true"><polygon points="${element.width * 0.64},${element.height * 0.76} ${element.tailX},${element.tailY} ${element.width * 0.78},${element.height * 0.73}" fill="${element.background}" stroke="${element.borderColor}" stroke-width="${element.borderWidth}" stroke-linejoin="round"/></svg>` : "";
+    content = `${tail}<div class="bubble-shape bubble-${element.variant}" style="--bubble-bg:${element.background};--bubble-color:${element.color};--bubble-border:${element.borderColor};--bubble-border-width:${element.borderWidth}px"><div style="font-size:${element.fontSize}px;font-weight:${element.fontWeight};text-align:${element.align}">${escapeHtml(element.text).replaceAll("\n", "<br>")}</div></div>`;
   }
-  return `<div class="${classes} ${runtime.preferences.cropElementId === element.id ? "is-crop-mode" : ""}" data-element-id="${element.id}" data-kind="${element.kind}" style="${style}">${content}${selected && !runtime.preferences.preview ? transformHandles() : ""}${element.locked ? `<span class="locked-badge">${icon("lock")}</span>` : ""}</div>`;
+  return `<div class="${classes} ${runtime.preferences.cropElementId === element.id ? "is-crop-mode" : ""}" data-element-id="${escapeHtml(element.id)}" data-kind="${element.kind}" style="${style}">${content}${selected && !runtime.preferences.preview ? transformHandles() : ""}${element.locked ? `<span class="locked-badge">${icon("lock")}</span>` : ""}</div>`;
 }
 
 function cropOverlay(element: ImageElement): string {
@@ -298,7 +306,10 @@ function renderRightSidebar(element: MangaElement | null): string {
 }
 
 function renderRasterInspector(layer: RasterLayer): string {
-  return `<section class="inspector-section"><div class="inspector-heading"><div><span class="eyebrow">RASTER LAYER</span><h2>${escapeHtml(layer.name)}</h2></div><span class="beta-badge">LOCAL</span></div><p class="sidebar-note">วาดด้วย Canvas ที่ความละเอียดเดียวกับ Page และบันทึก binary snapshot ใน IndexedDB</p><label class="field-block"><span>สีแปรง</span><div class="color-input-wrap"><input type="color" data-brush-pref="color" value="${escapeHtml(runtime.preferences.brushColor)}"/><code>${escapeHtml(runtime.preferences.brushColor)}</code></div></label><label class="field-block"><span>ขนาด <output>${runtime.preferences.brushSize}px</output></span><input type="range" data-brush-pref="size" min="1" max="240" step="1" value="${runtime.preferences.brushSize}"/></label><label class="field-block"><span>ความทึบ <output>${Math.round(runtime.preferences.brushOpacity * 100)}%</output></span><input type="range" data-brush-pref="opacity" min="0.05" max="1" step="0.01" value="${runtime.preferences.brushOpacity}"/></label><label class="toggle-field"><input type="checkbox" data-raster-alpha-lock ${layer.alphaLock ? "checked" : ""}/><span>ล็อกอัลฟา</span></label><div class="sidebar-note">Preset ปัจจุบันเลือกจาก Photoshop-style toolbox ทางซ้าย • ${layer.strokes.length} stroke</div></section>`;
+  const maskControls = layer.mask
+    ? `<label class="toggle-field"><input type="checkbox" data-raster-mask-enabled ${layer.mask.enabled ? "checked" : ""}/><span>เปิด Selection Mask</span></label><div class="inspector-actions-grid"><button data-action="invert-raster-mask">กลับด้าน Mask</button><button data-action="remove-raster-mask">ลบ Mask</button></div>`
+    : `<button class="wide-action subtle" data-action="apply-raster-mask" ${runtime.pixelSelection ? "" : "disabled"}>สร้าง Mask จาก Selection</button>`;
+  return `<section class="inspector-section"><div class="inspector-heading"><div><span class="eyebrow">RASTER LAYER</span><h2>${escapeHtml(layer.name)}</h2></div><button class="icon-button small" data-action="delete-element">${icon("trash")}</button></div><p class="sidebar-note">วาดด้วย Canvas ที่ความละเอียดเดียวกับ Page และบันทึก binary snapshot ใน IndexedDB</p><label class="field-block"><span>สีแปรง</span><div class="color-input-wrap"><input type="color" data-brush-pref="color" value="${escapeHtml(runtime.preferences.brushColor)}"/><code>${escapeHtml(runtime.preferences.brushColor)}</code></div></label><label class="field-block"><span>ขนาด <output>${runtime.preferences.brushSize}px</output></span><input type="range" data-brush-pref="size" min="1" max="240" step="1" value="${runtime.preferences.brushSize}"/></label><label class="field-block"><span>ความทึบ <output>${Math.round(runtime.preferences.brushOpacity * 100)}%</output></span><input type="range" data-brush-pref="opacity" min="0.05" max="1" step="0.01" value="${runtime.preferences.brushOpacity}"/></label><label class="toggle-field"><input type="checkbox" data-raster-alpha-lock ${layer.alphaLock ? "checked" : ""}/><span>ล็อกอัลฟา</span></label><div class="section-label">Mask</div>${maskControls}<div class="inspector-actions-grid"><button data-action="bring-forward">ขึ้นหนึ่งชั้น</button><button data-action="send-backward">ลงหนึ่งชั้น</button><button data-action="split-raster-stroke" ${layer.strokes.length ? "" : "disabled"}>แยก Stroke ล่าสุด</button></div><div class="sidebar-note">Preset ปัจจุบันเลือกจาก Photoshop-style toolbox ทางซ้าย • ${layer.strokes.length} stroke</div></section>`;
 }
 
 function renderPageInspector(): string {
@@ -309,6 +320,7 @@ function renderPageInspector(): string {
       ${fieldText("ชื่อหน้า", "page-name", page.name)}
       <div class="field-row two-columns">${fieldNumber("กว้าง", "page-width", page.width, 320, 3000)}${fieldNumber("สูง", "page-height", page.height, 320, 5000)}</div>
       ${fieldColor("สีพื้นหลัง", "page-background", page.background)}
+      <div class="section-label">พื้นหลังไฟล์ส่งออก</div><label class="toggle-field"><input type="checkbox" data-export-transparent ${runtime.preferences.exportTransparent ? "checked" : ""}/><span>PNG โปร่งใส (ไม่วาดพื้นหน้า)</span></label><label class="field-block color-field"><span>JPG / PDF / CBZ</span><span class="color-input-wrap"><input type="color" data-export-background value="${escapeHtml(runtime.preferences.exportBackgroundColor)}"/><code>${escapeHtml(runtime.preferences.exportBackgroundColor)}</code></span></label>
       <label class="field-block"><span>ทิศทางการอ่าน</span><select data-project-prop="readingDirection"><option value="rtl" ${runtime.project.readingDirection === "rtl" ? "selected" : ""}>ขวา → ซ้าย (Manga)</option><option value="ltr" ${runtime.project.readingDirection === "ltr" ? "selected" : ""}>ซ้าย → ขวา (Comic)</option></select></label>
       ${renderHierarchyManager()}
       <div class="document-stats"><span><strong>${page.elements.length}</strong> องค์ประกอบ</span><span><strong>${runtime.project.pages.length}</strong> หน้า</span><span><strong>${runtime.project.assets.length}</strong> รูป</span></div>
@@ -349,7 +361,7 @@ function imageInspector(element: ImageElement): string {
 }
 
 function textInspector(element: TextElement): string {
-  return `<div class="section-label">ข้อความ</div>${fieldTextarea("เนื้อหา", "text", element.text)}<div class="field-row two-columns">${fieldNumber("ขนาด", "fontSize", element.fontSize, 8, 300)}${fieldNumber("น้ำหนัก", "fontWeight", element.fontWeight, 100, 1000, 50)}</div>${fieldColor("สีข้อความ", "color", element.color)}${alignmentField(element.align)}<div class="field-row two-columns">${fieldNumber("ระยะบรรทัด", "lineHeight", element.lineHeight, 0.6, 3, 0.05)}${fieldNumber("ระยะตัวอักษร", "letterSpacing", element.letterSpacing, -10, 40, 0.5)}</div>`;
+  return `<div class="section-label">ข้อความ</div>${fieldTextarea("เนื้อหา", "text", element.text)}<div class="field-row two-columns">${fieldNumber("ขนาด", "fontSize", element.fontSize, 8, 300)}${fieldNumber("น้ำหนัก", "fontWeight", element.fontWeight, 100, 1000, 50)}</div><label class="field-block"><span>ทิศทางข้อความ</span><select data-element-prop="writingMode">${option("horizontal", "แนวนอน", element.writingMode)}${option("vertical", "แนวตั้ง", element.writingMode)}</select></label>${fieldColor("สีข้อความ", "color", element.color)}${alignmentField(element.align)}<div class="field-row two-columns">${fieldNumber("ระยะบรรทัด", "lineHeight", element.lineHeight, 0.6, 3, 0.05)}${fieldNumber("ระยะตัวอักษร", "letterSpacing", element.letterSpacing, -10, 40, 0.5)}</div><div class="section-label">เส้นขอบและเงา</div><div class="field-row two-columns">${fieldColor("สีเส้นขอบ", "outlineColor", element.outlineColor)}${fieldNumber("ความหนา", "outlineWidth", element.outlineWidth, 0, 20, 0.5)}</div><div class="field-row two-columns">${fieldColor("สีเงา", "shadowColor", element.shadowColor)}${fieldNumber("ความฟุ้ง", "shadowBlur", element.shadowBlur, 0, 60)}</div>`;
 }
 
 function bubbleInspector(element: BubbleElement): string {
@@ -383,7 +395,7 @@ function renderMultiInspector(count: number): string {
 function renderHierarchyManager(): string {
   const volume = runtime.project.volumes.find((item) => item.id === runtime.project.activeVolumeId) ?? runtime.project.volumes[0];
   const chapter = runtime.project.chapters.find((item) => item.id === runtime.project.activeChapterId) ?? runtime.project.chapters[0];
-  return `<div class="hierarchy-manager"><div class="section-label">เล่มและบท</div><div class="field-row two-columns"><label class="field-block"><span>Volume</span><select data-hierarchy-volume>${runtime.project.volumes.map((item) => `<option value="${item.id}" ${item.id === volume?.id ? "selected" : ""}>${escapeHtml(item.name)}</option>`).join("")}</select></label><label class="field-block"><span>Chapter</span><select data-hierarchy-chapter>${runtime.project.chapters.filter((item) => item.volumeId === volume?.id).map((item) => `<option value="${item.id}" ${item.id === chapter?.id ? "selected" : ""}>${escapeHtml(item.name)}</option>`).join("")}</select></label></div><div class="field-row two-columns"><label class="field-block"><span>ชื่อเล่ม</span><input type="text" data-hierarchy-volume-name value="${escapeHtml(volume?.name ?? "")}"/></label><label class="field-block"><span>ชื่อบท</span><input type="text" data-hierarchy-chapter-name value="${escapeHtml(chapter?.name ?? "")}"/></label></div><div class="inspector-actions-grid"><button data-action="add-volume">+ เล่ม</button><button data-action="add-chapter">+ บท</button><button data-action="delete-volume" ${runtime.project.volumes.length <= 1 ? "disabled" : ""}>ลบเล่ม</button><button data-action="delete-chapter" ${runtime.project.chapters.length <= 1 ? "disabled" : ""}>ลบบท</button></div></div>`;
+  return `<div class="hierarchy-manager"><div class="section-label">เล่มและบท</div><div class="field-row two-columns"><label class="field-block"><span>Volume</span><select data-hierarchy-volume>${runtime.project.volumes.map((item) => `<option value="${escapeHtml(item.id)}" ${item.id === volume?.id ? "selected" : ""}>${escapeHtml(item.name)}</option>`).join("")}</select></label><label class="field-block"><span>Chapter</span><select data-hierarchy-chapter>${runtime.project.chapters.filter((item) => item.volumeId === volume?.id).map((item) => `<option value="${escapeHtml(item.id)}" ${item.id === chapter?.id ? "selected" : ""}>${escapeHtml(item.name)}</option>`).join("")}</select></label></div><div class="field-row two-columns"><label class="field-block"><span>ชื่อเล่ม</span><input type="text" data-hierarchy-volume-name value="${escapeHtml(volume?.name ?? "")}"/></label><label class="field-block"><span>ชื่อบท</span><input type="text" data-hierarchy-chapter-name value="${escapeHtml(chapter?.name ?? "")}"/></label></div><div class="inspector-actions-grid"><button data-action="add-volume">+ เล่ม</button><button data-action="add-chapter">+ บท</button><button data-action="delete-volume" ${runtime.project.volumes.length <= 1 ? "disabled" : ""}>ลบเล่ม</button><button data-action="delete-chapter" ${runtime.project.chapters.length <= 1 ? "disabled" : ""}>ลบบท</button></div></div>`;
 }
 
 function saveStatusLabel(): string {
@@ -399,19 +411,14 @@ function option(value: string, label: string, current: string): string {
 
 function renderLayersPanel(): string {
   const page = activePage();
-  const entries = [
-    ...page.rasterLayers.map((layer) => ({ id: layer.id, name: layer.name, kind: "raster" as const, hidden: layer.hidden, locked: layer.locked })),
-    ...page.elements.map((element) => ({ id: element.id, name: element.name, kind: element.kind, hidden: element.hidden, locked: element.locked })),
-  ];
-  const byId = new Map(entries.map((entry) => [entry.id, entry]));
-  const layers = [...page.layerOrder.map((id) => byId.get(id)).filter((entry): entry is (typeof entries)[number] => entry !== undefined), ...entries.filter((entry) => !page.layerOrder.includes(entry.id))].reverse();
+  const layers = orderedPageLayers(page).map((layer) => ({ id: layer.id, name: layer.name, kind: layer.kind, hidden: layer.hidden, locked: layer.locked })).reverse();
   return `
     <section class="layers-section">
       <div class="inspector-heading sticky-heading"><div><span class="eyebrow">STACK</span><h2>เลเยอร์</h2></div><span class="count-badge">${layers.length}</span></div>
       <div class="layer-actions"><button data-action="add-raster-layer">+ Raster Layer</button><button data-action="clear-raster-layer">ล้างเลเยอร์</button></div>
       <div class="layers-list">${layers
         .map(
-          (layer) => `<div class="layer-row ${layer.id === runtime.selectedId ? "is-active" : ""}" data-layer-id="${layer.id}"><button class="layer-visibility" data-layer-visibility="${layer.id}">${icon(layer.hidden ? "hidden" : "eye")}</button><span class="layer-kind">${icon(layer.kind === "image" ? "image" : layer.kind === "panel" ? "panel" : layer.kind === "text" ? "text" : layer.kind === "bubble" ? "bubble" : "brush")}</span><span class="layer-name">${escapeHtml(layer.name)}</span><button class="layer-lock" data-layer-lock="${layer.id}">${icon(layer.locked ? "lock" : "unlock")}</button></div>`,
+          (layer) => `<div class="layer-row ${layer.id === runtime.selectedId ? "is-active" : ""}" data-layer-id="${escapeHtml(layer.id)}"><button class="layer-visibility" data-layer-visibility="${escapeHtml(layer.id)}">${icon(layer.hidden ? "hidden" : "eye")}</button><span class="layer-kind">${icon(layer.kind === "image" ? "image" : layer.kind === "panel" ? "panel" : layer.kind === "text" ? "text" : layer.kind === "bubble" ? "bubble" : "brush")}</span><span class="layer-name">${escapeHtml(layer.name)}</span><button class="layer-lock" data-layer-lock="${escapeHtml(layer.id)}">${icon(layer.locked ? "lock" : "unlock")}</button></div>`,
         )
         .join("")}</div>
     </section>
@@ -428,7 +435,7 @@ function renderPageStrip(): string {
           (element) => `<i style="left:${(element.x / page.width) * 100}%;top:${(element.y / page.height) * 100}%;width:${(element.width / page.width) * 100}%;height:${(element.height / page.height) * 100}%"></i>`,
         )
         .join("");
-      return `<button class="page-card ${page.id === runtime.project.activePageId ? "is-active" : ""}" data-page-id="${page.id}"><span class="page-number">${index + 1}</span><span class="page-mini" style="background:${page.background}">${mini}</span><span class="page-card-meta"><strong>${escapeHtml(page.name)}</strong><small>${panels.length} ช่อง</small></span></button>`;
+      return `<button class="page-card ${page.id === runtime.project.activePageId ? "is-active" : ""}" data-page-id="${escapeHtml(page.id)}"><span class="page-number">${index + 1}</span><span class="page-mini" style="background:${page.background}">${mini}</span><span class="page-card-meta"><strong>${escapeHtml(page.name)}</strong><small>${panels.length} ช่อง</small></span></button>`;
     })
     .join("");
   return `<footer class="page-strip"><div class="page-strip-label"><span>หน้า</span><strong>${runtime.project.pages.length}</strong></div><div class="page-cards">${cards}</div><div class="page-actions"><button data-action="add-page">${icon("plus")} หน้าใหม่</button><button data-action="duplicate-page">${icon("duplicate")} ทำสำเนา</button><button data-action="move-page-back" title="เลื่อนหน้าก่อนหน้า">←</button><button data-action="move-page-forward" title="เลื่อนหน้าถัดไป">→</button><button data-action="export-project">ส่งออก .cherrymanga</button><button data-action="import-project">นำเข้า</button><button data-action="delete-page" ${runtime.project.pages.length <= 1 ? "disabled" : ""}>${icon("trash")}</button></div></footer>`;

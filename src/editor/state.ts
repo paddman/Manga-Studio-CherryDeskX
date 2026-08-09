@@ -51,6 +51,8 @@ function loadPreferences(): EditorPreferences {
     brushSize: 18,
     brushOpacity: 0.85,
     activeRasterLayerId: null,
+    exportTransparent: false,
+    exportBackgroundColor: "#ffffff",
   };
   if (typeof localStorage === "undefined") return defaults;
   try {
@@ -114,8 +116,14 @@ export function selectedElement(): MangaElement | null {
 }
 
 export function setSelection(ids: string[]): void {
-  const available = new Set(activePage().elements.map((element) => element.id));
-  const uniqueIds = [...new Set(ids)].filter((id) => available.has(id));
+  const elements = activePage().elements;
+  const byId = new Map(elements.map((element) => [element.id, element]));
+  const expanded = ids.flatMap((id) => {
+    const element = byId.get(id);
+    if (!element) return [];
+    return element.groupId ? elements.filter((candidate) => candidate.groupId === element.groupId).map((candidate) => candidate.id) : [id];
+  });
+  const uniqueIds = [...new Set(expanded)];
   runtime.selectedIds = uniqueIds;
   runtime.selectedId = uniqueIds.at(-1) ?? null;
 }

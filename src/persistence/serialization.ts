@@ -46,6 +46,16 @@ function imageSource(value: unknown): string {
   return typeof value === "string" ? value : "";
 }
 
+function colorValue(value: unknown, fallback: string): string {
+  return typeof value === "string" && /^#[0-9a-f]{3,8}$/i.test(value) ? value : fallback;
+}
+
+function fontFamilyValue(value: unknown): string {
+  if (typeof value !== "string") return "system-ui, sans-serif";
+  const sanitized = value.replace(/[;{}<>"']/g, "").trim().slice(0, 120);
+  return sanitized || "system-ui, sans-serif";
+}
+
 function normalizeAsset(value: unknown, index: number): MangaAsset {
   const source = isRecord(value) ? value : {};
   return {
@@ -60,7 +70,7 @@ function normalizeAsset(value: unknown, index: number): MangaAsset {
   };
 }
 
-function baseElement(source: JsonRecord, kind: MangaElement["kind"], index: number): Pick<MangaElement, "id" | "kind" | "name" | "x" | "y" | "width" | "height" | "rotation" | "opacity" | "locked" | "hidden" | "lockAspect" | "flipX" | "flipY"> {
+function baseElement(source: JsonRecord, kind: MangaElement["kind"], index: number): Pick<MangaElement, "id" | "kind" | "name" | "x" | "y" | "width" | "height" | "rotation" | "opacity" | "locked" | "hidden" | "lockAspect" | "flipX" | "flipY" | "parentId" | "groupId" | "readingOrder"> {
   return {
     id: stringValue(source.id, `${kind}_migrated_${index}`),
     kind,
@@ -76,6 +86,9 @@ function baseElement(source: JsonRecord, kind: MangaElement["kind"], index: numb
     lockAspect: booleanValue(source.lockAspect, false),
     flipX: booleanValue(source.flipX, false),
     flipY: booleanValue(source.flipY, false),
+    parentId: typeof source.parentId === "string" ? source.parentId : undefined,
+    groupId: typeof source.groupId === "string" ? source.groupId : undefined,
+    readingOrder: typeof source.readingOrder === "number" && Number.isFinite(source.readingOrder) ? source.readingOrder : undefined,
   };
 }
 
@@ -87,8 +100,8 @@ function normalizeElement(value: unknown, index: number, assets: MangaAsset[]): 
     return {
       ...baseElement(source, "panel", index),
       kind: "panel",
-      background: stringValue(source.background, "#ffffff"),
-      borderColor: stringValue(source.borderColor, "#131019"),
+      background: colorValue(source.background, "#ffffff"),
+      borderColor: colorValue(source.borderColor, "#131019"),
       borderWidth: numberValue(source.borderWidth, 8),
       borderRadius: numberValue(source.borderRadius, 2),
       clipChildren: booleanValue(source.clipChildren, true),
@@ -130,17 +143,17 @@ function normalizeElement(value: unknown, index: number, assets: MangaAsset[]): 
       ...baseElement(source, "text", index),
       kind: "text",
       text: stringValue(source.text, "พิมพ์ข้อความตรงนี้"),
-      color: stringValue(source.color, "#17131f"),
+      color: colorValue(source.color, "#17131f"),
       fontSize: numberValue(source.fontSize, 34),
       fontWeight: numberValue(source.fontWeight, 800),
-      fontFamily: stringValue(source.fontFamily, "system-ui, sans-serif"),
+      fontFamily: fontFamilyValue(source.fontFamily),
       align: source.align === "left" || source.align === "right" ? source.align : "center",
       lineHeight: numberValue(source.lineHeight, 1.25),
       letterSpacing: numberValue(source.letterSpacing, 0),
       writingMode: source.writingMode === "vertical" ? "vertical" : "horizontal",
-      outlineColor: stringValue(source.outlineColor, "#000000"),
+      outlineColor: colorValue(source.outlineColor, "#000000"),
       outlineWidth: numberValue(source.outlineWidth, 0),
-      shadowColor: stringValue(source.shadowColor, "#000000"),
+      shadowColor: colorValue(source.shadowColor, "#000000"),
       shadowBlur: numberValue(source.shadowBlur, 0),
     } satisfies TextElement;
   }
@@ -159,9 +172,9 @@ function normalizeElement(value: unknown, index: number, assets: MangaAsset[]): 
       kind: "bubble",
       text: stringValue(source.text, "พิมพ์บทพูดตรงนี้"),
       variant: source.variant === "thought" || source.variant === "shout" || source.variant === "caption" ? source.variant : "speech",
-      background: stringValue(source.background, "#ffffff"),
-      color: stringValue(source.color, "#17131f"),
-      borderColor: stringValue(source.borderColor, "#17131f"),
+      background: colorValue(source.background, "#ffffff"),
+      color: colorValue(source.color, "#17131f"),
+      borderColor: colorValue(source.borderColor, "#17131f"),
       borderWidth: numberValue(source.borderWidth, 5),
       fontSize: numberValue(source.fontSize, 25),
       fontWeight: numberValue(source.fontWeight, 750),
@@ -199,7 +212,7 @@ function normalizeSelection(value: unknown): PixelSelectionShape | undefined {
 
 function normalizeStroke(value: unknown, index: number): RasterStroke | null {
   if (!isRecord(value)) return null;
-  const kind = value.kind === "line" || value.kind === "rectangle" || value.kind === "ellipse" || value.kind === "polygon" || value.kind === "fill" || value.kind === "gradient"
+  const kind = value.kind === "line" || value.kind === "rectangle" || value.kind === "ellipse" || value.kind === "polygon" || value.kind === "fill" || value.kind === "gradient" || value.kind === "bucket" || value.kind === "erase-fill"
     ? value.kind
     : "stroke";
   const blendMode = value.blendMode === "destination-out" || value.blendMode === "multiply" || value.blendMode === "screen" || value.blendMode === "overlay"
@@ -216,6 +229,8 @@ function normalizeStroke(value: unknown, index: number): RasterStroke | null {
     blendMode,
     rotation: numberValue(value.rotation, 0),
     selection: normalizeSelection(value.selection),
+    preserveAlpha: booleanValue(value.preserveAlpha, false),
+    tolerance: Math.min(255, Math.max(0, numberValue(value.tolerance, 24))),
   };
 }
 
@@ -224,6 +239,8 @@ function normalizeRasterLayer(value: unknown, index: number, pageWidth: number, 
   const strokes = Array.isArray(value.strokes)
     ? value.strokes.map(normalizeStroke).filter((stroke): stroke is RasterStroke => stroke !== null)
     : [];
+  const maskRecord = isRecord(value.mask) ? value.mask : null;
+  const maskSelection = maskRecord ? normalizeSelection(maskRecord.selection) : undefined;
   return {
     id: stringValue(value.id, `raster_migrated_${index}`),
     kind: "raster",
@@ -237,6 +254,7 @@ function normalizeRasterLayer(value: unknown, index: number, pageWidth: number, 
     blendMode: value.blendMode === "destination-out" || value.blendMode === "multiply" || value.blendMode === "screen" || value.blendMode === "overlay" ? value.blendMode : "source-over",
     strokes,
     bitmapKey: typeof value.bitmapKey === "string" ? value.bitmapKey : undefined,
+    mask: maskSelection ? { enabled: booleanValue(maskRecord?.enabled, true), inverted: booleanValue(maskRecord?.inverted, false), selection: maskSelection } : undefined,
   };
 }
 
@@ -258,7 +276,7 @@ function normalizePage(value: unknown, index: number, volumeId: string, chapterI
     name: stringValue(source.name, `หน้า ${index + 1}`),
     width,
     height,
-    background: stringValue(source.background, "#f7f5fb"),
+    background: colorValue(source.background, "#f7f5fb"),
     elements,
     rasterLayers,
     layerOrder,

@@ -12,7 +12,7 @@ export const PROJECT_SCHEMA_VERSION = 3;
 export type ToolId = string & { readonly __toolId: unique symbol };
 export type Tool = ToolId;
 
-export type RasterStrokeKind = "stroke" | "line" | "rectangle" | "ellipse" | "polygon" | "fill" | "gradient";
+export type RasterStrokeKind = "stroke" | "line" | "rectangle" | "ellipse" | "polygon" | "fill" | "gradient" | "bucket" | "erase-fill";
 export type RasterBlendMode = "source-over" | "destination-out" | "multiply" | "screen" | "overlay";
 
 export interface RasterPoint {
@@ -41,6 +41,8 @@ export interface RasterStroke {
   blendMode: RasterBlendMode;
   rotation?: number;
   selection?: PixelSelectionShape;
+  preserveAlpha?: boolean;
+  tolerance?: number;
 }
 
 export interface RasterLayer {
@@ -56,6 +58,13 @@ export interface RasterLayer {
   blendMode: RasterBlendMode;
   strokes: RasterStroke[];
   bitmapKey?: string;
+  mask?: RasterLayerMask;
+}
+
+export interface RasterLayerMask {
+  enabled: boolean;
+  inverted: boolean;
+  selection: PixelSelectionShape;
 }
 
 export interface CropSettings {
@@ -226,6 +235,8 @@ export interface EditorPreferences {
   brushSize: number;
   brushOpacity: number;
   activeRasterLayerId: string | null;
+  exportTransparent: boolean;
+  exportBackgroundColor: string;
 }
 
 export interface SelectionGuide {
