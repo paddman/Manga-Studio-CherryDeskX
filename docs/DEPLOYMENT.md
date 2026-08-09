@@ -52,6 +52,23 @@ location / {
 }
 ```
 
+The repository includes a complete virtual host at
+`deploy/nginx/manga.cherrydeskx.com.conf`. On an Ubuntu host using the existing
+BeezaChat certificate, install and enable it with:
+
+```bash
+sudo install -m 0644 deploy/nginx/manga.cherrydeskx.com.conf \
+  /etc/nginx/sites-available/manga.cherrydeskx.com
+sudo ln -s /etc/nginx/sites-available/manga.cherrydeskx.com \
+  /etc/nginx/sites-enabled/manga.cherrydeskx.com
+sudo nginx -t
+sudo systemctl reload nginx
+```
+
+Use a certificate whose origin coverage includes this hostname when the proxy
+does TLS termination. Cloudflare mode and origin certificate policy remain
+deployment-specific.
+
 ## Persistence model
 
 The editor stores versioned project metadata in IndexedDB and binary assets in a separate IndexedDB object store. `localStorage` is retained only as a metadata fallback for browsers without IndexedDB. Legacy MVP data URLs are migrated to the binary store during initialization. `.cherrymanga` files are portable ZIP archives containing `project.json` and asset binaries.
