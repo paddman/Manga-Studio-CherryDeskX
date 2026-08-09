@@ -3,7 +3,7 @@ import { createPersistenceRepositories, type PersistenceRepositories } from "../
 import { hydrateAssetSources, migrateProject, serializeProject } from "../persistence/serialization";
 import { registerProjectFonts } from "./font-assets";
 import { toolId } from "./tools";
-import type { EditorPreferences, MangaElement, MangaPage, MangaProject, PixelSelectionShape, RasterStroke, SelectionGuide } from "../types";
+import type { CropSettings, EditorPreferences, MangaElement, MangaPage, MangaProject, PixelSelectionShape, RasterStroke, SelectionGuide } from "../types";
 
 const PREFS_KEY = "cherry-manga-studio.preferences.v2";
 const LEGACY_PREFS_KEY = "cherry-manga-studio.preferences.v1";
@@ -27,6 +27,13 @@ export interface SelectionRectangle {
   height: number;
 }
 
+export interface CropSessionState {
+  elementId: string;
+  original: CropSettings;
+  historyPastLength: number;
+  historyFuture: string[];
+}
+
 export interface RuntimeState {
   project: MangaProject;
   selectedId: string | null;
@@ -44,6 +51,7 @@ export interface RuntimeState {
   persistence: PersistenceRepositories;
   persistenceReady: boolean;
   clipboard: MangaElement[];
+  cropSession: CropSessionState | null;
   exportTask: ExportTaskState;
 }
 
@@ -132,6 +140,7 @@ export const runtime: RuntimeState = {
   persistence: createPersistenceRepositories(),
   persistenceReady: false,
   clipboard: [],
+  cropSession: null,
   exportTask: { status: "idle", completed: 0, total: 0, label: "" },
 };
 
@@ -294,6 +303,7 @@ function restoreSnapshot(value: string): void {
   runtime.selectedId = null;
   runtime.selectedIds = [];
   runtime.preferences.cropElementId = null;
+  runtime.cropSession = null;
 }
 
 export function undoProject(): boolean {

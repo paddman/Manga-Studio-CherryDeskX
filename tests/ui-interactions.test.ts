@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderApp } from "../src/editor/view";
 import { runtime, setSelection } from "../src/editor/state";
 import { createStarterProject } from "../src/sample";
-import { createGestureController } from "../src/app/gestures";
+import { createGestureController, pagePosition } from "../src/app/gestures";
 
 function mountEditor(): HTMLElement {
   document.body.innerHTML = `<div id="app">${renderApp()}</div>`;
@@ -16,6 +16,7 @@ describe("production editor DOM interactions", () => {
   beforeEach(() => {
     runtime.project = createStarterProject();
     runtime.preferences.cropElementId = null;
+    runtime.cropSession = null;
     runtime.preferences.tool = "select" as typeof runtime.preferences.tool;
     setSelection([]);
     document.body.innerHTML = "";
@@ -74,6 +75,10 @@ describe("production editor DOM interactions", () => {
     expect(cropElement?.classList.contains("is-crop-mode")).toBe(true);
     expect(cropElement?.querySelectorAll("[data-crop-resize]")).toHaveLength(8);
     expect(cropElement?.querySelector("[data-crop-move]")).not.toBeNull();
+    expect(cropElement?.querySelector("[data-crop-draw]")).not.toBeNull();
+    expect(cropElement?.querySelector("[data-resize]")).toBeNull();
+    expect(cropElement?.querySelector(".crop-source-preview img")?.getAttribute("style")).toContain("object-fit:fill");
+    expect(app.querySelector('[data-action="paste-crop"]')?.textContent).toContain("ตัดแล้ววางเป็นรูปใหม่");
   });
 
   it("captures a crop pointer gesture as one bounded document interaction", () => {
@@ -96,5 +101,31 @@ describe("production editor DOM interactions", () => {
     expect(image.crop.width).toBeCloseTo(0.8);
     expect(image.crop.height).toBeCloseTo(0.75);
     expect(rerender).toHaveBeenCalledWith("เลือกพื้นที่ Crop แล้ว");
+  });
+
+  it("draws a new crop rectangle directly on the darkened image area", () => {
+    const image = runtime.project.pages[0]!.elements.find((element) => element.kind === "image");
+    if (!image || image.kind !== "image") throw new Error("starter image missing");
+    setSelection([image.id]);
+    runtime.preferences.cropElementId = image.id;
+    const app = mountEditor();
+    const node = app.querySelector<HTMLElement>(`[data-element-id="${image.id}"]`);
+    if (!node) throw new Error("image node missing");
+    const position = pagePosition(image);
+    const rerender = vi.fn();
+    const controller = createGestureController({
+      pagePoint: (event) => ({ x: event.clientX, y: event.clientY, pressure: event.pressure || 1 }),
+      render: vi.fn(),
+      rerender,
+    });
+    controller.beginCropDraw(new PointerEvent("pointerdown", { clientX: position.x + image.width * 0.1, clientY: position.y + image.height * 0.2, pointerId: 9 }), image, node);
+    window.dispatchEvent(new PointerEvent("pointermove", { clientX: position.x + image.width * 0.65, clientY: position.y + image.height * 0.75, pointerId: 9 }));
+    window.dispatchEvent(new PointerEvent("pointerup", { pointerId: 9 }));
+
+    expect(image.crop.left).toBeCloseTo(0.1);
+    expect(image.crop.top).toBeCloseTo(0.2);
+    expect(image.crop.width).toBeCloseTo(0.55);
+    expect(image.crop.height).toBeCloseTo(0.55);
+    expect(rerender).toHaveBeenCalledWith("เลือกกรอบตัดรูปแล้ว");
   });
 });

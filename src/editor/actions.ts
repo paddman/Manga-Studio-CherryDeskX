@@ -10,6 +10,7 @@ import {
 import { safeAssetMimeType, sanitizeSvg, validateImageFile } from "../security/files";
 import type {
   BubbleVariant,
+  CropSettings,
   ImageElement,
   MangaAsset,
   MangaElement,
@@ -237,6 +238,10 @@ export function deleteSelected(): void {
     }
     setSelection([]);
     runtime.preferences.activeRasterLayerId = null;
+    if (runtime.preferences.cropElementId && ids.has(runtime.preferences.cropElementId)) {
+      runtime.preferences.cropElementId = null;
+      runtime.cropSession = null;
+    }
   });
 }
 
@@ -476,6 +481,40 @@ export function setCropRect(element: ImageElement, next: CropRect): void {
     width,
     height,
   };
+}
+
+export function pasteCroppedSelectionAsImage(originalCrop: CropSettings): string | null {
+  const element = selectedElement();
+  if (!element || element.kind !== "image") return null;
+  const page = activePage();
+  const crop = getCropRect(element);
+  const parent = element.parentId ? page.elements.find((candidate) => candidate.id === element.parentId) : null;
+  const rawWidth = Math.max(1, element.width * crop.width);
+  const rawHeight = Math.max(1, element.height * crop.height);
+  const minimumScale = Math.max(1, 48 / rawWidth, 48 / rawHeight);
+  const width = Math.round(rawWidth * minimumScale);
+  const height = Math.round(rawHeight * minimumScale);
+  const sourceX = element.x + (parent?.x ?? 0) + crop.left * element.width;
+  const sourceY = element.y + (parent?.y ?? 0) + crop.top * element.height;
+  const piece = structuredClone(element);
+  piece.id = uid("image");
+  piece.name = `${element.name} • ส่วนที่ตัด`;
+  piece.x = clamp(sourceX + 28, 0, Math.max(0, page.width - width));
+  piece.y = clamp(sourceY + 28, 0, Math.max(0, page.height - height));
+  piece.width = width;
+  piece.height = height;
+  piece.parentId = undefined;
+  piece.groupId = undefined;
+  piece.locked = false;
+  piece.hidden = false;
+  piece.crop = structuredClone(element.crop);
+
+  element.crop = structuredClone(originalCrop);
+  transact(() => {
+    page.elements.push(piece);
+    setSelection([piece.id]);
+  });
+  return piece.id;
 }
 
 export function setCropValue(axis: "x" | "y" | "scale", value: number): void {
