@@ -1,9 +1,10 @@
 import { migrateProject, serializeProject, type PersistedProject } from "./serialization";
 
 const DATABASE_NAME = "cherry-manga-studio";
-const DATABASE_VERSION = 1;
+const DATABASE_VERSION = 2;
 const PROJECT_STORE = "projects";
 const ASSET_STORE = "assets";
+const RASTER_STORE = "rasters";
 const PROJECT_KEY = "current";
 
 export interface ProjectRepository {
@@ -18,13 +19,25 @@ export interface AssetRepository {
   listIds(): Promise<string[]>;
 }
 
+export interface RasterRepository {
+  put(bitmapKey: string, blob: Blob): Promise<void>;
+  get(bitmapKey: string): Promise<Blob | null>;
+  remove(bitmapKey: string): Promise<void>;
+}
+
 export interface PersistenceRepositories {
   projects: ProjectRepository;
   assets: AssetRepository;
+  rasters: RasterRepository;
 }
 
 interface StoredAsset {
   assetId: string;
+  blob: Blob;
+}
+
+interface StoredRaster {
+  bitmapKey: string;
   blob: Blob;
 }
 
@@ -50,6 +63,7 @@ function openDatabase(): Promise<IDBDatabase> {
       const database = request.result;
       if (!database.objectStoreNames.contains(PROJECT_STORE)) database.createObjectStore(PROJECT_STORE);
       if (!database.objectStoreNames.contains(ASSET_STORE)) database.createObjectStore(ASSET_STORE, { keyPath: "assetId" });
+      if (!database.objectStoreNames.contains(RASTER_STORE)) database.createObjectStore(RASTER_STORE, { keyPath: "bitmapKey" });
     };
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error ?? new Error("เปิด IndexedDB ไม่สำเร็จ"));
@@ -107,6 +121,30 @@ export class IndexedDbAssetRepository implements AssetRepository {
   }
 }
 
+export class IndexedDbRasterRepository implements RasterRepository {
+  async put(bitmapKey: string, blob: Blob): Promise<void> {
+    const database = await openDatabase();
+    const transaction = database.transaction(RASTER_STORE, "readwrite");
+    transaction.objectStore(RASTER_STORE).put({ bitmapKey, blob } satisfies StoredRaster);
+    await transactionDone(transaction);
+  }
+
+  async get(bitmapKey: string): Promise<Blob | null> {
+    const database = await openDatabase();
+    const transaction = database.transaction(RASTER_STORE, "readonly");
+    const stored = await requestResult<StoredRaster | undefined>(transaction.objectStore(RASTER_STORE).get(bitmapKey));
+    await transactionDone(transaction);
+    return stored?.blob ?? null;
+  }
+
+  async remove(bitmapKey: string): Promise<void> {
+    const database = await openDatabase();
+    const transaction = database.transaction(RASTER_STORE, "readwrite");
+    transaction.objectStore(RASTER_STORE).delete(bitmapKey);
+    await transactionDone(transaction);
+  }
+}
+
 export class LocalStorageProjectRepository implements ProjectRepository {
   constructor(private readonly key = "cherry-manga-studio.project.v2") {}
 
@@ -141,6 +179,22 @@ export class MemoryAssetRepository implements AssetRepository {
 
   async listIds(): Promise<string[]> {
     return [...this.assets.keys()];
+  }
+}
+
+export class MemoryRasterRepository implements RasterRepository {
+  private readonly rasters = new Map<string, Blob>();
+
+  async put(bitmapKey: string, blob: Blob): Promise<void> {
+    this.rasters.set(bitmapKey, blob);
+  }
+
+  async get(bitmapKey: string): Promise<Blob | null> {
+    return this.rasters.get(bitmapKey) ?? null;
+  }
+
+  async remove(bitmapKey: string): Promise<void> {
+    this.rasters.delete(bitmapKey);
   }
 }
 
@@ -216,12 +270,49 @@ class ResilientAssetRepository implements AssetRepository {
   }
 }
 
+class ResilientRasterRepository implements RasterRepository {
+  private useFallback = false;
+
+  constructor(private readonly primary: RasterRepository, private readonly fallback: RasterRepository) {}
+
+  async put(bitmapKey: string, blob: Blob): Promise<void> {
+    if (this.useFallback) return this.fallback.put(bitmapKey, blob);
+    try {
+      await this.primary.put(bitmapKey, blob);
+    } catch {
+      this.useFallback = true;
+      await this.fallback.put(bitmapKey, blob);
+    }
+  }
+
+  async get(bitmapKey: string): Promise<Blob | null> {
+    if (this.useFallback) return this.fallback.get(bitmapKey);
+    try {
+      return await this.primary.get(bitmapKey);
+    } catch {
+      this.useFallback = true;
+      return this.fallback.get(bitmapKey);
+    }
+  }
+
+  async remove(bitmapKey: string): Promise<void> {
+    if (this.useFallback) return this.fallback.remove(bitmapKey);
+    try {
+      await this.primary.remove(bitmapKey);
+    } catch {
+      this.useFallback = true;
+      await this.fallback.remove(bitmapKey);
+    }
+  }
+}
+
 export function createPersistenceRepositories(): PersistenceRepositories {
   if (typeof indexedDB !== "undefined") {
     return {
       projects: new ResilientProjectRepository(new IndexedDbProjectRepository(), new LocalStorageProjectRepository()),
       assets: new ResilientAssetRepository(new IndexedDbAssetRepository(), new MemoryAssetRepository()),
+      rasters: new ResilientRasterRepository(new IndexedDbRasterRepository(), new MemoryRasterRepository()),
     };
   }
-  return { projects: new LocalStorageProjectRepository(), assets: new MemoryAssetRepository() };
+  return { projects: new LocalStorageProjectRepository(), assets: new MemoryAssetRepository(), rasters: new MemoryRasterRepository() };
 }

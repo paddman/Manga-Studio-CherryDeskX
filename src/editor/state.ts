@@ -1,7 +1,8 @@
 import { createStarterProject } from "../sample";
 import { createPersistenceRepositories, type PersistenceRepositories } from "../persistence/repository";
 import { hydrateAssetSources, migrateProject, serializeProject } from "../persistence/serialization";
-import type { EditorPreferences, MangaElement, MangaPage, MangaProject, SelectionGuide } from "../types";
+import { toolId } from "./tools";
+import type { EditorPreferences, MangaElement, MangaPage, MangaProject, PixelSelectionShape, RasterStroke, SelectionGuide } from "../types";
 
 const PREFS_KEY = "cherry-manga-studio.preferences.v2";
 const LEGACY_PREFS_KEY = "cherry-manga-studio.preferences.v1";
@@ -29,6 +30,8 @@ export interface RuntimeState {
   saveStatus: SaveStatus;
   selectionGuides: SelectionGuide[];
   selectionRectangle: SelectionRectangle | null;
+  pixelSelection: PixelSelectionShape | null;
+  rasterPreview: RasterStroke | null;
   assetSources: Map<string, string>;
   persistence: PersistenceRepositories;
   persistenceReady: boolean;
@@ -42,8 +45,14 @@ function loadPreferences(): EditorPreferences {
     showSafeArea: true,
     preview: false,
     leftTab: "assets",
-    tool: "select",
+    tool: toolId("select"),
     cropElementId: null,
+    brushColor: "#17131f",
+    brushSize: 18,
+    brushOpacity: 0.85,
+    activeRasterLayerId: null,
+    exportTransparent: false,
+    exportBackgroundColor: "#ffffff",
   };
   if (typeof localStorage === "undefined") return defaults;
   try {
@@ -53,6 +62,7 @@ function loadPreferences(): EditorPreferences {
     return {
       ...defaults,
       ...parsed,
+      tool: typeof parsed.tool === "string" ? toolId(parsed.tool) : defaults.tool,
       cropElementId: null,
     };
   } catch {
@@ -81,6 +91,8 @@ export const runtime: RuntimeState = {
   saveStatus: "saved",
   selectionGuides: [],
   selectionRectangle: null,
+  pixelSelection: null,
+  rasterPreview: null,
   assetSources: new Map<string, string>(),
   persistence: createPersistenceRepositories(),
   persistenceReady: false,
@@ -104,8 +116,14 @@ export function selectedElement(): MangaElement | null {
 }
 
 export function setSelection(ids: string[]): void {
-  const available = new Set(activePage().elements.map((element) => element.id));
-  const uniqueIds = [...new Set(ids)].filter((id) => available.has(id));
+  const elements = activePage().elements;
+  const byId = new Map(elements.map((element) => [element.id, element]));
+  const expanded = ids.flatMap((id) => {
+    const element = byId.get(id);
+    if (!element) return [];
+    return element.groupId ? elements.filter((candidate) => candidate.groupId === element.groupId).map((candidate) => candidate.id) : [id];
+  });
+  const uniqueIds = [...new Set(expanded)];
   runtime.selectedIds = uniqueIds;
   runtime.selectedId = uniqueIds.at(-1) ?? null;
 }

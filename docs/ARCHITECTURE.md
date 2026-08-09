@@ -3,8 +3,9 @@
 ## Runtime boundaries
 
 ```text
-DOM events -> editor/actions -> versioned RuntimeState -> ProjectRepository
-                                      |                 -> AssetRepository (IndexedDB blobs)
+DOM events -> editor/tools + editor/actions -> versioned RuntimeState -> ProjectRepository
+                                      |                                -> AssetRepository (IndexedDB blobs)
+                                      |                                -> RasterRepository (IndexedDB bitmap snapshots)
                                       v
                                editor/view -> DOM canvas
                                       |
@@ -17,14 +18,17 @@ DOM events -> editor/actions -> versioned RuntimeState -> ProjectRepository
 
 - Mutations go through typed actions and `transact()`. A pointer drag calls `checkpoint()` once at pointer-down and saves once at pointer-up, so pointer moves do not create history items.
 - `parentId` makes an image a child of a panel. The DOM renders the image inside a clipped panel container; the Canvas exporter applies the same panel path before drawing the child.
-- Crop state is `{ x, y, scale }` on an image. Double-click enters crop mode and changes the image inside the existing panel/image frame.
+- Crop state is `{ x, y, scale, left, top, width, height }` on an image. Double-click enters crop mode and changes the image inside the existing panel/image frame.
 - `selectedIds` supports Shift-click and marquee selection. Snapping candidates include page edges/center and non-selected element edges/centers. Guides are transient runtime state and are never exported.
-- Project schema migration normalizes legacy MVP documents to `PROJECT_SCHEMA_VERSION` 2, including the volume/chapter hierarchy and new element defaults.
+- `MangaPage.rasterLayers` and `layerOrder` form one low-to-high stack for editor rendering, inspector ordering and export. Panel children remain scoped to their clipping container.
+- Raster strokes are replayable Canvas operations. They support geometric pixel selections, contiguous flood fill/erase, alpha-preserving paint, optional selection masks and moving the latest stroke to a new layer.
+- Pointer interactions use pointer capture, one history checkpoint per gesture and pure coordinate/selection helpers. `DEFAULT_TOOL_KEYMAP` maps standard shortcuts and can be replaced by a typed custom map later.
+- Project schema migration normalizes legacy MVP documents to `PROJECT_SCHEMA_VERSION` 3, including raster-layer defaults, the volume/chapter hierarchy and new element defaults.
 
 ## Persistence and integration
 
-`ProjectRepository` and `AssetRepository` are the stable boundaries. IndexedDB is the browser implementation; local metadata and in-memory assets are safe fallbacks for unsupported/offline environments. `src/integrations/cherrydeskx.ts` defines SSO, Workspace, revision and AI job contracts. The HTTP adapter is only constructed when `VITE_ENABLE_CHERRYDESKX_API=true`; no demo response is fabricated.
+`ProjectRepository`, `AssetRepository` and `RasterRepository` are the stable boundaries. IndexedDB is the browser implementation; local metadata, in-memory assets and in-memory raster snapshots are safe fallbacks for unsupported/offline environments. `src/integrations/cherrydeskx.ts` defines SSO, Workspace, typed asset, revision and AI job contracts. The HTTP adapter is only constructed when `VITE_ENABLE_CHERRYDESKX_API=true`; no demo response is fabricated.
 
 ## Export
 
-The export pipeline rasterizes the domain page without selection boxes, guides or editor overlays. PNG/JPG are page outputs, PDF embeds page JPEGs, CBZ/ZIP use store-only ZIP entries, Webtoon composes and splits long pages at a configurable height, and `.cherrymanga` includes versioned JSON plus asset binaries for round-trip editing.
+The export pipeline walks the same unified layer order as the editor and excludes selection boxes, guides and editor overlays. PNG can omit the page background for alpha; JPG/PDF/CBZ default to white and accept a chosen background. PDF embeds page JPEGs, CBZ/ZIP use store-only ZIP entries, and Webtoon slices can split inside an oversized page without dropping pixels. `.cherrymanga` includes versioned JSON plus asset/raster binaries and validates entry paths, sizes, CRC checksums and schema compatibility on import.

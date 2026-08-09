@@ -7,6 +7,10 @@ import type {
   MangaPage,
   MangaProject,
   PanelElement,
+  PixelSelectionShape,
+  RasterLayer,
+  RasterPoint,
+  RasterStroke,
   TextElement,
 } from "../types";
 import { PROJECT_SCHEMA_VERSION } from "../types";
@@ -42,6 +46,16 @@ function imageSource(value: unknown): string {
   return typeof value === "string" ? value : "";
 }
 
+function colorValue(value: unknown, fallback: string): string {
+  return typeof value === "string" && /^#[0-9a-f]{3,8}$/i.test(value) ? value : fallback;
+}
+
+function fontFamilyValue(value: unknown): string {
+  if (typeof value !== "string") return "system-ui, sans-serif";
+  const sanitized = value.replace(/[;{}<>"']/g, "").trim().slice(0, 120);
+  return sanitized || "system-ui, sans-serif";
+}
+
 function normalizeAsset(value: unknown, index: number): MangaAsset {
   const source = isRecord(value) ? value : {};
   return {
@@ -56,7 +70,7 @@ function normalizeAsset(value: unknown, index: number): MangaAsset {
   };
 }
 
-function baseElement(source: JsonRecord, kind: MangaElement["kind"], index: number): Pick<MangaElement, "id" | "kind" | "name" | "x" | "y" | "width" | "height" | "rotation" | "opacity" | "locked" | "hidden" | "lockAspect" | "flipX" | "flipY"> {
+function baseElement(source: JsonRecord, kind: MangaElement["kind"], index: number): Pick<MangaElement, "id" | "kind" | "name" | "x" | "y" | "width" | "height" | "rotation" | "opacity" | "locked" | "hidden" | "lockAspect" | "flipX" | "flipY" | "parentId" | "groupId" | "readingOrder"> {
   return {
     id: stringValue(source.id, `${kind}_migrated_${index}`),
     kind,
@@ -72,6 +86,9 @@ function baseElement(source: JsonRecord, kind: MangaElement["kind"], index: numb
     lockAspect: booleanValue(source.lockAspect, false),
     flipX: booleanValue(source.flipX, false),
     flipY: booleanValue(source.flipY, false),
+    parentId: typeof source.parentId === "string" ? source.parentId : undefined,
+    groupId: typeof source.groupId === "string" ? source.groupId : undefined,
+    readingOrder: typeof source.readingOrder === "number" && Number.isFinite(source.readingOrder) ? source.readingOrder : undefined,
   };
 }
 
@@ -83,8 +100,8 @@ function normalizeElement(value: unknown, index: number, assets: MangaAsset[]): 
     return {
       ...baseElement(source, "panel", index),
       kind: "panel",
-      background: stringValue(source.background, "#ffffff"),
-      borderColor: stringValue(source.borderColor, "#131019"),
+      background: colorValue(source.background, "#ffffff"),
+      borderColor: colorValue(source.borderColor, "#131019"),
       borderWidth: numberValue(source.borderWidth, 8),
       borderRadius: numberValue(source.borderRadius, 2),
       clipChildren: booleanValue(source.clipChildren, true),
@@ -126,17 +143,17 @@ function normalizeElement(value: unknown, index: number, assets: MangaAsset[]): 
       ...baseElement(source, "text", index),
       kind: "text",
       text: stringValue(source.text, "พิมพ์ข้อความตรงนี้"),
-      color: stringValue(source.color, "#17131f"),
+      color: colorValue(source.color, "#17131f"),
       fontSize: numberValue(source.fontSize, 34),
       fontWeight: numberValue(source.fontWeight, 800),
-      fontFamily: stringValue(source.fontFamily, "system-ui, sans-serif"),
+      fontFamily: fontFamilyValue(source.fontFamily),
       align: source.align === "left" || source.align === "right" ? source.align : "center",
       lineHeight: numberValue(source.lineHeight, 1.25),
       letterSpacing: numberValue(source.letterSpacing, 0),
       writingMode: source.writingMode === "vertical" ? "vertical" : "horizontal",
-      outlineColor: stringValue(source.outlineColor, "#000000"),
+      outlineColor: colorValue(source.outlineColor, "#000000"),
       outlineWidth: numberValue(source.outlineWidth, 0),
-      shadowColor: stringValue(source.shadowColor, "#000000"),
+      shadowColor: colorValue(source.shadowColor, "#000000"),
       shadowBlur: numberValue(source.shadowBlur, 0),
     } satisfies TextElement;
   }
@@ -155,9 +172,9 @@ function normalizeElement(value: unknown, index: number, assets: MangaAsset[]): 
       kind: "bubble",
       text: stringValue(source.text, "พิมพ์บทพูดตรงนี้"),
       variant: source.variant === "thought" || source.variant === "shout" || source.variant === "caption" ? source.variant : "speech",
-      background: stringValue(source.background, "#ffffff"),
-      color: stringValue(source.color, "#17131f"),
-      borderColor: stringValue(source.borderColor, "#17131f"),
+      background: colorValue(source.background, "#ffffff"),
+      color: colorValue(source.color, "#17131f"),
+      borderColor: colorValue(source.borderColor, "#17131f"),
       borderWidth: numberValue(source.borderWidth, 5),
       fontSize: numberValue(source.fontSize, 25),
       fontWeight: numberValue(source.fontWeight, 750),
@@ -170,18 +187,99 @@ function normalizeElement(value: unknown, index: number, assets: MangaAsset[]): 
   return null;
 }
 
+function normalizePoint(value: unknown): RasterPoint | null {
+  if (!isRecord(value)) return null;
+  return {
+    x: numberValue(value.x, 0),
+    y: numberValue(value.y, 0),
+    pressure: Math.min(1, Math.max(0.05, numberValue(value.pressure, 1))),
+  };
+}
+
+function normalizeSelection(value: unknown): PixelSelectionShape | undefined {
+  if (!isRecord(value)) return undefined;
+  const mode = value.mode === "ellipse" || value.mode === "lasso" || value.mode === "polygon" ? value.mode : "rectangle";
+  const points = Array.isArray(value.points) ? value.points.map(normalizePoint).filter((point): point is RasterPoint => point !== null) : [];
+  return {
+    mode,
+    points,
+    x: numberValue(value.x, 0),
+    y: numberValue(value.y, 0),
+    width: Math.max(0, numberValue(value.width, 0)),
+    height: Math.max(0, numberValue(value.height, 0)),
+  };
+}
+
+function normalizeStroke(value: unknown, index: number): RasterStroke | null {
+  if (!isRecord(value)) return null;
+  const kind = value.kind === "line" || value.kind === "rectangle" || value.kind === "ellipse" || value.kind === "polygon" || value.kind === "fill" || value.kind === "gradient" || value.kind === "bucket" || value.kind === "erase-fill"
+    ? value.kind
+    : "stroke";
+  const blendMode = value.blendMode === "destination-out" || value.blendMode === "multiply" || value.blendMode === "screen" || value.blendMode === "overlay"
+    ? value.blendMode
+    : "source-over";
+  return {
+    id: stringValue(value.id, `stroke_migrated_${index}`),
+    kind,
+    preset: stringValue(value.preset, "brush"),
+    points: Array.isArray(value.points) ? value.points.map(normalizePoint).filter((point): point is RasterPoint => point !== null) : [],
+    color: stringValue(value.color, "#17131f"),
+    size: Math.max(1, numberValue(value.size, 12)),
+    opacity: Math.min(1, Math.max(0, numberValue(value.opacity, 1))),
+    blendMode,
+    rotation: numberValue(value.rotation, 0),
+    selection: normalizeSelection(value.selection),
+    preserveAlpha: booleanValue(value.preserveAlpha, false),
+    tolerance: Math.min(255, Math.max(0, numberValue(value.tolerance, 24))),
+  };
+}
+
+function normalizeRasterLayer(value: unknown, index: number, pageWidth: number, pageHeight: number): RasterLayer | null {
+  if (!isRecord(value)) return null;
+  const strokes = Array.isArray(value.strokes)
+    ? value.strokes.map(normalizeStroke).filter((stroke): stroke is RasterStroke => stroke !== null)
+    : [];
+  const maskRecord = isRecord(value.mask) ? value.mask : null;
+  const maskSelection = maskRecord ? normalizeSelection(maskRecord.selection) : undefined;
+  return {
+    id: stringValue(value.id, `raster_migrated_${index}`),
+    kind: "raster",
+    name: stringValue(value.name, `Raster ${index + 1}`),
+    width: Math.max(1, numberValue(value.width, pageWidth)),
+    height: Math.max(1, numberValue(value.height, pageHeight)),
+    opacity: Math.min(1, Math.max(0, numberValue(value.opacity, 1))),
+    hidden: booleanValue(value.hidden, false),
+    locked: booleanValue(value.locked, false),
+    alphaLock: booleanValue(value.alphaLock, false),
+    blendMode: value.blendMode === "destination-out" || value.blendMode === "multiply" || value.blendMode === "screen" || value.blendMode === "overlay" ? value.blendMode : "source-over",
+    strokes,
+    bitmapKey: typeof value.bitmapKey === "string" ? value.bitmapKey : undefined,
+    mask: maskSelection ? { enabled: booleanValue(maskRecord?.enabled, true), inverted: booleanValue(maskRecord?.inverted, false), selection: maskSelection } : undefined,
+  };
+}
+
 function normalizePage(value: unknown, index: number, volumeId: string, chapterId: string, assets: MangaAsset[]): MangaPage {
   const source = isRecord(value) ? value : {};
   const elements = Array.isArray(source.elements)
     ? source.elements.map((element, elementIndex) => normalizeElement(element, elementIndex, assets)).filter((element): element is MangaElement => element !== null)
     : [];
+  const width = Math.max(320, numberValue(source.width, 794));
+  const height = Math.max(320, numberValue(source.height, 1123));
+  const rasterLayers = Array.isArray(source.rasterLayers)
+    ? source.rasterLayers.map((layer, layerIndex) => normalizeRasterLayer(layer, layerIndex, width, height)).filter((layer): layer is RasterLayer => layer !== null)
+    : [];
+  const rawOrder = Array.isArray(source.layerOrder) ? source.layerOrder.filter((id): id is string => typeof id === "string") : [];
+  const availableIds = [...elements.map((element) => element.id), ...rasterLayers.map((layer) => layer.id)];
+  const layerOrder = [...new Set([...rawOrder, ...availableIds])].filter((id) => availableIds.includes(id));
   return {
     id: stringValue(source.id, `page_migrated_${index}`),
     name: stringValue(source.name, `หน้า ${index + 1}`),
-    width: Math.max(320, numberValue(source.width, 794)),
-    height: Math.max(320, numberValue(source.height, 1123)),
-    background: stringValue(source.background, "#f7f5fb"),
+    width,
+    height,
+    background: colorValue(source.background, "#f7f5fb"),
     elements,
+    rasterLayers,
+    layerOrder,
     volumeId: stringValue(source.volumeId, volumeId),
     chapterId: stringValue(source.chapterId, chapterId),
     order: numberValue(source.order, index),

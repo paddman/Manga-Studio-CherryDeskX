@@ -17,6 +17,7 @@ import type {
   ReadingDirection,
 } from "../types";
 import { activePage, runtime, selectedElement, selectedElements, setSelection, transact } from "./state";
+import { movePageLayer, normalizePageLayerOrder, removeFromPageLayerOrder } from "./layers";
 import { getTemplatePanels } from "./templates";
 
 export function clamp(value: number, min: number, max: number): number {
@@ -26,12 +27,17 @@ export function clamp(value: number, min: number, max: number): number {
 export function applyPanelTemplate(template: string): void {
   transact(() => {
     const page = activePage();
+    const previousOrder = [...normalizePageLayerOrder(page)];
     const content = page.elements.filter((element) => element.kind !== "panel").map((element) => {
       if (element.kind !== "image" || !element.parentId) return element;
       const parent = page.elements.find((candidate) => candidate.id === element.parentId);
       return parent ? { ...element, x: element.x + parent.x, y: element.y + parent.y, parentId: undefined } : { ...element, parentId: undefined };
     });
-    page.elements = [...getTemplatePanels(template, page), ...content];
+    const panels = getTemplatePanels(template, page);
+    const retainedIds = new Set([...content.map((element) => element.id), ...page.rasterLayers.map((layer) => layer.id)]);
+    page.elements = [...panels, ...content];
+    page.layerOrder = [...panels.map((panel) => panel.id), ...previousOrder.filter((id) => retainedIds.has(id))];
+    normalizePageLayerOrder(page);
     runtime.selectedId = null;
   });
 }
@@ -170,42 +176,73 @@ export async function addAssetToPage(assetId: string): Promise<boolean> {
   return true;
 }
 
+function includeSelectedPanelChildren(elements: MangaElement[]): MangaElement[] {
+  const pageElements = activePage().elements;
+  const ids = new Set(elements.map((element) => element.id));
+  let added = true;
+  while (added) {
+    added = false;
+    for (const element of pageElements) {
+      if (!element.parentId || !ids.has(element.parentId) || ids.has(element.id)) continue;
+      ids.add(element.id);
+      added = true;
+    }
+  }
+  return pageElements.filter((element) => ids.has(element.id));
+}
+
+function cloneElements(elements: MangaElement[], offset: number): MangaElement[] {
+  const ids = new Map(elements.map((element) => [element.id, uid(element.kind)]));
+  const uniqueGroups = [...new Set(elements.map((element) => element.groupId).filter((groupId): groupId is string => Boolean(groupId)))];
+  const groups = new Map(uniqueGroups.map((groupId) => [groupId, uid("group")]));
+  return elements.map((element) => {
+    const mappedParentId = element.parentId ? ids.get(element.parentId) : undefined;
+    return {
+      ...structuredClone(element),
+      id: ids.get(element.id) ?? uid(element.kind),
+      name: `${element.name} สำเนา`,
+      x: element.x + (mappedParentId ? 0 : offset),
+      y: element.y + (mappedParentId ? 0 : offset),
+      parentId: mappedParentId ?? element.parentId,
+      groupId: element.groupId ? groups.get(element.groupId) : undefined,
+    };
+  }) as MangaElement[];
+}
+
 export function duplicateSelected(): void {
-  const elements = selectedElements();
+  const selected = selectedElements();
+  const elements = includeSelectedPanelChildren(selected);
   if (!elements.length) return;
   transact(() => {
-    const clones = elements.map((element) => {
-      const clone = structuredClone(element) as MangaElement;
-      clone.id = uid(element.kind);
-      clone.name = `${element.name} สำเนา`;
-      clone.x += 24;
-      clone.y += 24;
-      return clone;
-    });
+    const clones = cloneElements(elements, 24);
     activePage().elements.push(...clones);
-    setSelection(clones.map((clone) => clone.id));
+    const selectedIds = new Set(selected.map((element) => element.id));
+    setSelection(clones.flatMap((clone, index) => selectedIds.has(elements[index]?.id ?? "") ? [clone.id] : []));
   });
 }
 
 export function deleteSelected(): void {
-  const ids = new Set(selectedElements().map((element) => element.id));
+  const ids = new Set([...runtime.selectedIds, ...(runtime.selectedId ? [runtime.selectedId] : [])]);
   if (!ids.size) return;
   transact(() => {
     const page = activePage();
     page.elements = page.elements.filter((element) => !ids.has(element.id) && !(element.parentId && ids.has(element.parentId)));
+    const removedRasters = page.rasterLayers.filter((layer) => ids.has(layer.id));
+    page.rasterLayers = page.rasterLayers.filter((layer) => !ids.has(layer.id));
+    removeFromPageLayerOrder(page, ids);
+    for (const layer of removedRasters) {
+      if (layer.bitmapKey) void runtime.persistence.rasters.remove(layer.bitmapKey);
+    }
     setSelection([]);
+    runtime.preferences.activeRasterLayerId = null;
   });
 }
 
 export function moveLayer(direction: 1 | -1): void {
-  if (!runtime.selectedId) return;
+  const selectedId = runtime.selectedId;
+  if (!selectedId) return;
   transact(() => {
-    const elements = activePage().elements;
-    const index = elements.findIndex((element) => element.id === runtime.selectedId);
-    const nextIndex = clamp(index + direction, 0, elements.length - 1);
-    if (index < 0 || index === nextIndex) return;
-    const [item] = elements.splice(index, 1);
-    if (item) elements.splice(nextIndex, 0, item);
+    movePageLayer(activePage(), selectedId, direction);
   });
 }
 
@@ -229,6 +266,8 @@ export function addPage(): void {
       height: PAGE_HEIGHT,
       background: "#f7f5fb",
       elements: [],
+      rasterLayers: [],
+      layerOrder: [],
       volumeId: volume.id,
       chapterId: chapter.id,
       order: chapter.pageIds.length,
@@ -248,12 +287,18 @@ export function duplicatePage(): void {
     const clone = structuredClone(page);
     clone.id = uid("page");
     clone.name = `${page.name} สำเนา`;
-    const ids = new Map<string, string>();
+    const ids = new Map(clone.elements.map((element) => [element.id, uid(element.kind)]));
     clone.elements = clone.elements.map((element) => {
-      const nextId = uid(element.kind);
-      ids.set(element.id, nextId);
+      const nextId = ids.get(element.id) ?? uid(element.kind);
       return { ...element, id: nextId, parentId: element.parentId ? ids.get(element.parentId) : undefined };
     }) as MangaElement[];
+    const rasterIds = new Map<string, string>();
+    clone.rasterLayers = clone.rasterLayers.map((layer) => {
+      const nextId = uid("raster");
+      rasterIds.set(layer.id, nextId);
+      return { ...layer, id: nextId, bitmapKey: undefined, strokes: layer.strokes.map((stroke) => ({ ...stroke, id: uid("stroke") })) };
+    });
+    clone.layerOrder = clone.layerOrder.map((id) => ids.get(id) ?? rasterIds.get(id) ?? id);
     const index = runtime.project.pages.findIndex((item) => item.id === page.id);
     runtime.project.pages.splice(index + 1, 0, clone);
     const chapter = runtime.project.chapters.find((item) => item.id === clone.chapterId);
@@ -277,6 +322,7 @@ export function deletePage(): void {
 export function smartLayout(): void {
   transact(() => {
     const page = activePage();
+    const previousOrder = [...normalizePageLayerOrder(page)];
     const imageCount = page.elements.filter((element) => element.kind === "image").length;
     const content = page.elements.filter((element) => element.kind !== "panel").map((element) => {
       if (element.kind !== "image" || !element.parentId) return element;
@@ -299,6 +345,9 @@ export function smartLayout(): void {
       image.rotation = 0;
       image.fit = "cover";
     });
+    const retainedIds = new Set([...content.map((element) => element.id), ...page.rasterLayers.map((layer) => layer.id)]);
+    page.layerOrder = [...panels.map((panel) => panel.id), ...previousOrder.filter((id) => retainedIds.has(id))];
+    normalizePageLayerOrder(page);
     runtime.selectedId = null;
   });
 }
@@ -326,6 +375,8 @@ export function setSelectedProperty(prop: string, rawValue: string | boolean): v
       "fontWeight",
       "lineHeight",
       "letterSpacing",
+      "outlineWidth",
+      "shadowBlur",
       "tailX",
       "tailY",
     ]);
@@ -342,6 +393,10 @@ export function setPageProperty(prop: string, rawValue: string): void {
     if (prop === "page-width") page.width = clamp(Number(rawValue), 320, 3000);
     if (prop === "page-height") page.height = clamp(Number(rawValue), 320, 5000);
     if (prop === "page-background") page.background = rawValue;
+    page.rasterLayers.forEach((layer) => {
+      layer.width = page.width;
+      layer.height = page.height;
+    });
   });
 }
 
@@ -652,7 +707,20 @@ export function ungroupSelected(): void {
 }
 
 export function copySelected(): void {
-  runtime.clipboard = structuredClone(selectedElements()) as MangaElement[];
+  const selected = includeSelectedPanelChildren(selectedElements());
+  const selectedIds = new Set(selected.map((element) => element.id));
+  runtime.clipboard = selected.map((element) => {
+    const clone = structuredClone(element) as MangaElement;
+    if (clone.parentId && !selectedIds.has(clone.parentId)) {
+      const parent = activePage().elements.find((candidate) => candidate.id === clone.parentId);
+      if (parent) {
+        clone.x += parent.x;
+        clone.y += parent.y;
+      }
+      clone.parentId = undefined;
+    }
+    return clone;
+  });
 }
 
 export function cutSelected(): void {
@@ -663,7 +731,7 @@ export function cutSelected(): void {
 export function pasteElements(): void {
   if (!runtime.clipboard.length) return;
   transact(() => {
-    const pasted = runtime.clipboard.map((element) => ({ ...structuredClone(element), id: uid(element.kind), x: element.x + 28, y: element.y + 28 })) as MangaElement[];
+    const pasted = cloneElements(runtime.clipboard, 28);
     activePage().elements.push(...pasted);
     setSelection(pasted.map((element) => element.id));
   });

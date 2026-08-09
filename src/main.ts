@@ -2,6 +2,10 @@ import "./styles.css";
 import { downloadBlobFile, exportProject, type ExportFormat } from "./export";
 import { exportProjectBundle, importProjectBundle } from "./persistence/archive";
 import { hydrateAssetSources } from "./persistence/serialization";
+import { renderRasterLayer } from "./editor/raster";
+import { addRasterLayer, applyPixelSelectionAsLayerMask, clearPixelSelection, clearRasterLayer, ensureRasterLayer, invertRasterLayerMask, persistRasterCanvas, recordRasterStroke, removeRasterLayerMask, selectRasterLayer, splitLastStrokeToLayer } from "./editor/raster-actions";
+import { buildPixelSelection, clientToPagePoint, isEraserToolId, isUsablePixelSelection, rasterStrokeKindForToolId, selectionModeForToolId } from "./editor/interactions";
+import { canUseTool, getToolDefinition, isRasterTool, resolveToolShortcut, toolId } from "./editor/tools";
 import {
   addAssetToPage,
   addBubble,
@@ -57,7 +61,7 @@ import {
   undoProject,
 } from "./editor/state";
 import { renderApp } from "./editor/view";
-import type { BubbleVariant, ImageElement, LeftTab, MangaElement, TextAlign, Tool } from "./types";
+import type { BubbleVariant, ImageElement, LeftTab, MangaElement, PixelSelectionShape, RasterPoint, RasterStroke, TextAlign, Tool } from "./types";
 
 const root = document.querySelector<HTMLDivElement>("#app");
 if (!root) throw new Error("Missing #app root");
@@ -66,6 +70,19 @@ let toastTimer: number | undefined;
 
 function render(): void {
   appRoot.innerHTML = renderApp();
+  const page = activePage();
+  document.querySelectorAll<HTMLCanvasElement>("[data-raster-layer-id]").forEach((canvas) => {
+    const layer = page.rasterLayers.find((candidate) => candidate.id === canvas.dataset.rasterLayerId);
+    if (!layer) return;
+    const preview = runtime.preferences.activeRasterLayerId === layer.id ? runtime.rasterPreview : null;
+    renderRasterLayer(canvas, page, layer, preview);
+  });
+}
+
+function activeRasterCanvas(): HTMLCanvasElement | null {
+  const layerId = runtime.preferences.activeRasterLayerId;
+  if (!layerId) return null;
+  return document.querySelector<HTMLCanvasElement>(`[data-raster-layer-id="${CSS.escape(layerId)}"]`);
 }
 
 function showToast(message: string, tone: "default" | "success" | "danger" = "default"): void {
@@ -108,6 +125,23 @@ interface DragContext {
   items: DragItem[];
   startClientX: number;
   startClientY: number;
+}
+
+function capturePointer(event: PointerEvent): () => void {
+  const target = event.target instanceof Element ? event.target : null;
+  if (!target) return () => undefined;
+  try {
+    target.setPointerCapture(event.pointerId);
+  } catch {
+    return () => undefined;
+  }
+  return () => {
+    try {
+      if (target.hasPointerCapture(event.pointerId)) target.releasePointerCapture(event.pointerId);
+    } catch {
+      // A rerender can detach the original pointer target before pointerup.
+    }
+  };
 }
 
 function pagePosition(element: MangaElement): { x: number; y: number } {
@@ -178,6 +212,7 @@ function beginMove(event: PointerEvent, element: MangaElement, node: HTMLElement
     return;
   }
   const elements = selectedElements().filter((candidate) => !candidate.locked);
+  const releasePointer = capturePointer(event);
   checkpoint();
   const context: DragContext = {
     items: elements.map((candidate) => ({
@@ -216,6 +251,7 @@ function beginMove(event: PointerEvent, element: MangaElement, node: HTMLElement
 
   const end = (): void => {
     window.removeEventListener("pointermove", move);
+    releasePointer();
     for (const item of context.items) {
       if (item.element.kind !== "image" || item.element.parentId) continue;
       const position = pagePosition(item.element);
@@ -238,6 +274,7 @@ function beginMove(event: PointerEvent, element: MangaElement, node: HTMLElement
 }
 
 function beginCropMove(event: PointerEvent, element: ImageElement, node: HTMLElement): void {
+  const releasePointer = capturePointer(event);
   checkpoint();
   const start = getCropRect(element);
   const nodeRect = node.getBoundingClientRect();
@@ -248,6 +285,7 @@ function beginCropMove(event: PointerEvent, element: ImageElement, node: HTMLEle
   };
   const end = (): void => {
     window.removeEventListener("pointermove", move);
+    releasePointer();
     persistProject();
     rerender("ปรับ Crop แล้ว");
   };
@@ -256,6 +294,7 @@ function beginCropMove(event: PointerEvent, element: ImageElement, node: HTMLEle
 }
 
 function beginCropResize(event: PointerEvent, element: ImageElement, node: HTMLElement, handle: string): void {
+  const releasePointer = capturePointer(event);
   checkpoint();
   const start = getCropRect(element);
   const nodeRect = node.getBoundingClientRect();
@@ -276,6 +315,7 @@ function beginCropResize(event: PointerEvent, element: ImageElement, node: HTMLE
   };
   const end = (): void => {
     window.removeEventListener("pointermove", move);
+    releasePointer();
     persistProject();
     rerender("เลือกพื้นที่ Crop แล้ว");
   };
@@ -285,6 +325,7 @@ function beginCropResize(event: PointerEvent, element: ImageElement, node: HTMLE
 
 function beginResize(event: PointerEvent, element: MangaElement, node: HTMLElement, handle: string): void {
   if (element.locked) return;
+  const releasePointer = capturePointer(event);
   checkpoint();
   const context = {
     element,
@@ -344,6 +385,7 @@ function beginResize(event: PointerEvent, element: MangaElement, node: HTMLEleme
 
   const end = (): void => {
     window.removeEventListener("pointermove", move);
+    releasePointer();
     persistProject();
     rerender();
   };
@@ -353,6 +395,7 @@ function beginResize(event: PointerEvent, element: MangaElement, node: HTMLEleme
 
 function beginRotate(event: PointerEvent, element: MangaElement, node: HTMLElement): void {
   if (element.locked) return;
+  const releasePointer = capturePointer(event);
   checkpoint();
   const rect = node.getBoundingClientRect();
   const centerX = rect.left + rect.width / 2;
@@ -370,6 +413,7 @@ function beginRotate(event: PointerEvent, element: MangaElement, node: HTMLEleme
 
   const end = (): void => {
     window.removeEventListener("pointermove", move);
+    releasePointer();
     persistProject();
     rerender();
   };
@@ -380,6 +424,7 @@ function beginRotate(event: PointerEvent, element: MangaElement, node: HTMLEleme
 function beginPan(event: PointerEvent): void {
   const viewport = document.querySelector<HTMLElement>("[data-stage-viewport]");
   if (!viewport) return;
+  const releasePointer = capturePointer(event);
   const startX = event.clientX;
   const startY = event.clientY;
   const scrollLeft = viewport.scrollLeft;
@@ -388,7 +433,10 @@ function beginPan(event: PointerEvent): void {
     viewport.scrollLeft = scrollLeft - (moveEvent.clientX - startX);
     viewport.scrollTop = scrollTop - (moveEvent.clientY - startY);
   };
-  const end = (): void => window.removeEventListener("pointermove", move);
+  const end = (): void => {
+    window.removeEventListener("pointermove", move);
+    releasePointer();
+  };
   window.addEventListener("pointermove", move);
   window.addEventListener("pointerup", end, { once: true });
 }
@@ -396,6 +444,7 @@ function beginPan(event: PointerEvent): void {
 function beginSelectionRectangle(event: PointerEvent): void {
   const canvas = document.querySelector<HTMLElement>("[data-page-canvas]");
   if (!canvas) return;
+  const releasePointer = capturePointer(event);
   const rect = canvas.getBoundingClientRect();
   const startX = clamp((event.clientX - rect.left) / runtime.preferences.zoom, 0, activePage().width);
   const startY = clamp((event.clientY - rect.top) / runtime.preferences.zoom, 0, activePage().height);
@@ -422,6 +471,7 @@ function beginSelectionRectangle(event: PointerEvent): void {
   };
   const end = (): void => {
     window.removeEventListener("pointermove", update);
+    releasePointer();
     const selection = runtime.selectionRectangle;
     if (selection && (selection.width > 3 || selection.height > 3)) {
       const ids = activePage().elements.filter((element) => {
@@ -439,6 +489,194 @@ function beginSelectionRectangle(event: PointerEvent): void {
   window.addEventListener("pointerup", end, { once: true });
 }
 
+function pagePoint(event: PointerEvent): RasterPoint {
+  const canvas = document.querySelector<HTMLElement>("[data-page-canvas]");
+  const page = activePage();
+  if (!canvas) return { x: 0, y: 0, pressure: event.pressure || 1 };
+  return clientToPagePoint(event, canvas.getBoundingClientRect(), page);
+}
+
+function selectionModeForTool(tool: Tool): PixelSelectionShape["mode"] | null {
+  return selectionModeForToolId(tool as string);
+}
+
+function beginPixelSelection(event: PointerEvent, mode: PixelSelectionShape["mode"]): void {
+  const releasePointer = capturePointer(event);
+  const start = pagePoint(event);
+  const points: RasterPoint[] = [start];
+  const update = (moveEvent: PointerEvent): void => {
+    const current = pagePoint(moveEvent);
+    if (mode === "lasso" || mode === "polygon") points.push(current);
+    runtime.pixelSelection = buildPixelSelection(mode, mode === "lasso" || mode === "polygon" ? points : [start, current]);
+    render();
+  };
+  const end = (): void => {
+    window.removeEventListener("pointermove", update);
+    releasePointer();
+    const selection = runtime.pixelSelection;
+    if (!isUsablePixelSelection(selection)) clearPixelSelection();
+    render();
+  };
+  window.addEventListener("pointermove", update);
+  window.addEventListener("pointerup", end, { once: true });
+}
+
+function beginRasterStroke(event: PointerEvent, tool: Tool): void {
+  if (tool === toolId("lasso-fill") && !runtime.pixelSelection) {
+    showToast("ใช้ Lasso หรือ Marquee เลือกพื้นที่ก่อนเติมสี", "danger");
+    return;
+  }
+  let layer: ReturnType<typeof ensureRasterLayer>;
+  try {
+    layer = ensureRasterLayer();
+  } catch (error) {
+    showToast(error instanceof Error ? error.message : "สร้าง Raster layer ไม่สำเร็จ", "danger");
+    return;
+  }
+  if (layer.locked || layer.hidden) {
+    showToast("เลเยอร์ Raster นี้ถูกล็อกหรือซ่อนอยู่", "danger");
+    return;
+  }
+  const releasePointer = capturePointer(event);
+  const kind = rasterStrokeKindForToolId(tool as string);
+  const start = pagePoint(event);
+  const stroke: RasterStroke = {
+    id: `stroke_${Date.now()}_${Math.round(Math.random() * 100000)}`,
+    kind,
+    preset: tool as string,
+    points: [start],
+    color: runtime.preferences.brushColor,
+    size: runtime.preferences.brushSize,
+    opacity: runtime.preferences.brushOpacity,
+    blendMode: isEraserToolId(tool as string) ? "destination-out" : "source-over",
+    selection: runtime.pixelSelection ? structuredClone(runtime.pixelSelection) : undefined,
+    preserveAlpha: layer.alphaLock,
+    tolerance: 24,
+  };
+  if (!activeRasterCanvas()) render();
+  if (kind === "fill" || kind === "bucket" || kind === "erase-fill") {
+    recordRasterStroke(stroke);
+    render();
+    const canvas = activeRasterCanvas();
+    if (canvas) void persistRasterCanvas(canvas);
+    releasePointer();
+    showToast("เติมสีบน Raster layer แล้ว", "success");
+    return;
+  }
+  runtime.rasterPreview = stroke;
+  const update = (moveEvent: PointerEvent): void => {
+    stroke.points.push(pagePoint(moveEvent));
+    const canvas = activeRasterCanvas();
+    const activeLayer = activePage().rasterLayers.find((candidate) => candidate.id === runtime.preferences.activeRasterLayerId);
+    if (canvas && activeLayer) renderRasterLayer(canvas, activePage(), activeLayer, runtime.rasterPreview);
+  };
+  const end = (): void => {
+    window.removeEventListener("pointermove", update);
+    releasePointer();
+    if (stroke.points.length > 1 || kind !== "stroke") recordRasterStroke(stroke);
+    runtime.rasterPreview = null;
+    render();
+    const canvas = activeRasterCanvas();
+    if (canvas) void persistRasterCanvas(canvas);
+  };
+  window.addEventListener("pointermove", update);
+  window.addEventListener("pointerup", end, { once: true });
+}
+
+function applyCanvasTool(event: PointerEvent, tool: Tool): boolean {
+  const id = tool as string;
+  if (id === "grid") {
+    runtime.preferences.showGrid = !runtime.preferences.showGrid;
+    savePreferences();
+    render();
+    return true;
+  }
+  if (id === "crop") {
+    const image = selectedElement();
+    if (image?.kind === "image") {
+      runtime.preferences.cropElementId = image.id;
+      savePreferences();
+      render();
+    } else showToast("เลือกภาพก่อนใช้ Crop Tool", "default");
+    return true;
+  }
+  if (id === "text" || id === "horizontal-type" || id === "vertical-type" || id === "text-box") {
+    addTextElement(false);
+    const element = selectedElement();
+    if (element?.kind === "text") {
+      const point = pagePoint(event);
+      transact(() => {
+        element.x = point.x;
+        element.y = point.y;
+        element.writingMode = id === "vertical-type" ? "vertical" : "horizontal";
+      });
+    }
+    render();
+    return true;
+  }
+  if (id === "speech-balloon" || id === "thought-balloon" || id === "jagged-balloon") {
+    const variant = id === "thought-balloon" ? "thought" : id === "jagged-balloon" ? "shout" : "speech";
+    addBubble(variant);
+    const element = selectedElement();
+    if (element) {
+      const point = pagePoint(event);
+      transact(() => { element.x = point.x; element.y = point.y; });
+    }
+    render();
+    return true;
+  }
+  if (id === "balloon-tail") {
+    const element = selectedElement();
+    if (element?.kind !== "bubble") {
+      showToast("เลือกบอลลูนก่อนกำหนดตำแหน่งหาง", "default");
+      return true;
+    }
+    const point = pagePoint(event);
+    transact(() => {
+      element.tailX = clamp(point.x - element.x, 0, element.width);
+      element.tailY = clamp(point.y - element.y, 0, element.height * 1.6);
+      element.tails = [{ id: element.tails[0]?.id ?? `tail_${Date.now()}`, x: element.tailX, y: element.tailY }];
+    });
+    render();
+    return true;
+  }
+  if (id === "frame-border") {
+    addPanel();
+    const element = selectedElement();
+    if (element) {
+      const point = pagePoint(event);
+      transact(() => { element.x = point.x; element.y = point.y; });
+    }
+    render();
+    return true;
+  }
+  if (id === "flip") {
+    flipSelected("horizontal");
+    render();
+    return true;
+  }
+  if (id === "rotate") {
+    const elements = selectedElements();
+    if (elements.length) {
+      transact(() => elements.forEach((element) => { element.rotation += 15; }));
+      render();
+    }
+    return true;
+  }
+  if (id === "eyedropper" || id === "color-picker" || id === "color-sampler") {
+    const point = pagePoint(event);
+    const canvases = [...document.querySelectorAll<HTMLCanvasElement>("[data-raster-layer-id]")].reverse();
+    const color = canvases.map((canvas) => canvas.getContext("2d")?.getImageData(Math.round(point.x), Math.round(point.y), 1, 1).data).find((sample) => (sample?.[3] ?? 0) > 0);
+    if (color && (color[3] ?? 0) > 0) {
+      runtime.preferences.brushColor = `#${[color[0] ?? 0, color[1] ?? 0, color[2] ?? 0].map((value) => value.toString(16).padStart(2, "0")).join("")}`;
+      savePreferences();
+      showToast(`เลือกสี ${runtime.preferences.brushColor} แล้ว`, "success");
+    }
+    return true;
+  }
+  return false;
+}
+
 async function exportCurrentPage(): Promise<void> {
   const button = document.querySelector<HTMLButtonElement>("[data-action='export']");
   if (button) {
@@ -449,7 +687,12 @@ async function exportCurrentPage(): Promise<void> {
     const select = document.querySelector<HTMLSelectElement>("[data-export-format]");
     const format = (select?.value ?? "png") as ExportFormat;
     const scope = format === "zip" ? "project" : format === "pdf" || format === "cbz" || format === "webtoon" ? "chapter" : "page";
-    await exportProject(runtime.project, runtime.project.name, { format, scope, scale: 2 });
+    const backgroundColor = format === "png" && runtime.preferences.exportTransparent
+      ? null
+      : format === "jpg" || format === "pdf" || format === "cbz"
+        ? runtime.preferences.exportBackgroundColor
+        : undefined;
+    await exportProject(runtime.project, runtime.project.name, { format, scope, scale: 2, backgroundColor });
     showToast(`ส่งออก ${format.toUpperCase()} แล้ว`, "success");
   } catch (error) {
     showToast(error instanceof Error ? error.message : "ส่งออกไม่สำเร็จ", "danger");
@@ -460,7 +703,7 @@ async function exportCurrentPage(): Promise<void> {
 
 async function exportProjectFile(): Promise<void> {
   try {
-    const blob = await exportProjectBundle(runtime.project, runtime.persistence.assets);
+    const blob = await exportProjectBundle(runtime.project, runtime.persistence.assets, runtime.persistence.rasters);
     downloadBlobFile(blob, `${runtime.project.name.replace(/[^\p{L}\p{N}_-]+/gu, "-") || "manga-project"}.cherrymanga`);
     showToast("ส่งออกไฟล์ .cherrymanga แล้ว", "success");
   } catch (error) {
@@ -482,6 +725,7 @@ function importProjectFile(): void {
         await runtime.persistence.assets.put(assetId, blob);
         runtime.assetSources.set(assetId, URL.createObjectURL(blob));
       }));
+      await Promise.all([...bundle.rasters.entries()].map(async ([bitmapKey, blob]) => runtime.persistence.rasters.put(bitmapKey, blob)));
       hydrateAssetSources(runtime.project, runtime.assetSources);
       setSelection([]);
       persistProject();
@@ -537,6 +781,38 @@ async function handleAction(action: string): Promise<void> {
   }
   if (action === "open-upload") {
     document.querySelector<HTMLInputElement>("[data-upload-input]")?.click();
+    return;
+  }
+  if (action === "add-raster-layer") {
+    try {
+      addRasterLayer(`Raster ${activePage().rasterLayers.length + 1}`);
+      runtime.preferences.leftTab = "assets";
+      savePreferences();
+      rerender("เพิ่ม Raster layer แล้ว");
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : "เพิ่ม Raster layer ไม่สำเร็จ", "danger");
+    }
+    return;
+  }
+  if (action === "clear-raster-layer") {
+    if (clearRasterLayer()) rerender("ล้าง Raster layer แล้ว");
+    else showToast("ยังไม่มี stroke ให้ล้าง", "default");
+    return;
+  }
+  if (action === "split-raster-stroke") {
+    if (splitLastStrokeToLayer()) rerender("แยก Stroke ล่าสุดเป็น Raster layer ใหม่แล้ว");
+    return;
+  }
+  if (action === "apply-raster-mask") {
+    if (applyPixelSelectionAsLayerMask()) rerender("สร้าง Mask จาก Selection แล้ว");
+    return;
+  }
+  if (action === "invert-raster-mask") {
+    if (invertRasterLayerMask()) rerender("กลับด้าน Mask แล้ว");
+    return;
+  }
+  if (action === "remove-raster-mask") {
+    if (removeRasterLayerMask()) rerender("ลบ Mask แล้ว");
     return;
   }
   if (action === "reset-image-edits") return runMutation(resetImageEdits, "รีเซ็ตการแต่งรูปแล้ว");
@@ -629,6 +905,30 @@ appRoot.addEventListener("click", (event) => {
 
   const tool = target.closest<HTMLElement>("[data-tool]")?.dataset.tool as Tool | undefined;
   if (tool) {
+    const definition = getToolDefinition(tool);
+    if (!definition || !canUseTool(tool)) {
+      showToast(definition?.reason ?? "เครื่องมือนี้ยังไม่พร้อมใช้งาน", "default");
+      return;
+    }
+    if (tool === toolId("asset")) {
+      document.querySelector<HTMLInputElement>("[data-upload-input]")?.click();
+      return;
+    }
+    if (tool === toolId("alpha-lock")) {
+      const layer = activePage().rasterLayers.find((candidate) => candidate.id === runtime.preferences.activeRasterLayerId || candidate.id === runtime.selectedId);
+      if (!layer) {
+        showToast("เลือก Raster layer ก่อนเปิด Alpha Lock", "default");
+        return;
+      }
+      transact(() => { layer.alphaLock = !layer.alphaLock; });
+      rerender(layer.alphaLock ? "เปิด Alpha Lock แล้ว" : "ปิด Alpha Lock แล้ว");
+      return;
+    }
+    if (tool === toolId("layer-mask")) {
+      if (applyPixelSelectionAsLayerMask()) rerender("สร้าง Mask จาก Selection แล้ว");
+      else showToast("เลือก Raster layer และสร้าง Selection ก่อนใช้ Layer Mask", "default");
+      return;
+    }
     runtime.preferences.tool = tool;
     savePreferences();
     render();
@@ -668,6 +968,8 @@ appRoot.addEventListener("click", (event) => {
     transact(() => {
       const element = activePage().elements.find((item) => item.id === visibilityId);
       if (element) element.hidden = !element.hidden;
+      const raster = activePage().rasterLayers.find((item) => item.id === visibilityId);
+      if (raster) raster.hidden = !raster.hidden;
     });
     render();
     return;
@@ -678,6 +980,8 @@ appRoot.addEventListener("click", (event) => {
     transact(() => {
       const element = activePage().elements.find((item) => item.id === lockId);
       if (element) element.locked = !element.locked;
+      const raster = activePage().rasterLayers.find((item) => item.id === lockId);
+      if (raster) raster.locked = !raster.locked;
     });
     render();
     return;
@@ -685,6 +989,12 @@ appRoot.addEventListener("click", (event) => {
 
   const layerId = target.closest<HTMLElement>("[data-layer-id]")?.dataset.layerId;
   if (layerId) {
+    if (activePage().rasterLayers.some((layer) => layer.id === layerId)) {
+      selectRasterLayer(layerId);
+      savePreferences();
+      render();
+      return;
+    }
     setSelection(event.shiftKey ? [...runtime.selectedIds, layerId] : [layerId]);
     render();
     return;
@@ -707,6 +1017,44 @@ appRoot.addEventListener("change", (event) => {
       .finally(() => {
         input.value = "";
       });
+    return;
+  }
+
+  const brushPreference = target.dataset.brushPref;
+  if (brushPreference) {
+    if (brushPreference === "color") runtime.preferences.brushColor = target.value;
+    if (brushPreference === "size") runtime.preferences.brushSize = clamp(Number(target.value), 1, 240);
+    if (brushPreference === "opacity") runtime.preferences.brushOpacity = clamp(Number(target.value), 0.05, 1);
+    savePreferences();
+    render();
+    return;
+  }
+
+  if (target.matches("[data-raster-alpha-lock]")) {
+    const layer = activePage().rasterLayers.find((candidate) => candidate.id === runtime.selectedId);
+    if (layer) transact(() => { layer.alphaLock = (target as HTMLInputElement).checked; });
+    render();
+    return;
+  }
+
+  if (target.matches("[data-raster-mask-enabled]")) {
+    const layer = activePage().rasterLayers.find((candidate) => candidate.id === runtime.selectedId);
+    if (layer?.mask) transact(() => { if (layer.mask) layer.mask.enabled = (target as HTMLInputElement).checked; });
+    render();
+    return;
+  }
+
+  if (target.matches("[data-export-transparent]")) {
+    runtime.preferences.exportTransparent = (target as HTMLInputElement).checked;
+    savePreferences();
+    render();
+    return;
+  }
+
+  if (target.matches("[data-export-background]")) {
+    runtime.preferences.exportBackgroundColor = target.value;
+    savePreferences();
+    render();
     return;
   }
 
@@ -779,6 +1127,39 @@ appRoot.addEventListener("pointerdown", (event) => {
   if (runtime.preferences.tool === "hand" && target.closest("[data-stage-viewport]")) {
     event.preventDefault();
     beginPan(event);
+    return;
+  }
+
+  const activeTool = runtime.preferences.tool;
+  if (target.closest("[data-page-canvas]") && applyCanvasTool(event, activeTool)) {
+    event.preventDefault();
+    event.stopPropagation();
+    return;
+  }
+  const selectionMode = selectionModeForTool(activeTool);
+  if (selectionMode && target.closest("[data-page-canvas]")) {
+    event.preventDefault();
+    event.stopPropagation();
+    beginPixelSelection(event, selectionMode);
+    return;
+  }
+  if (activeTool === toolId("selection-eraser") && target.closest("[data-page-canvas]")) {
+    event.preventDefault();
+    clearPixelSelection();
+    render();
+    return;
+  }
+  if (isRasterTool(activeTool) && target.closest("[data-page-canvas]")) {
+    event.preventDefault();
+    event.stopPropagation();
+    beginRasterStroke(event, activeTool);
+    return;
+  }
+  if (activeTool === toolId("zoom") && target.closest("[data-page-canvas]")) {
+    event.preventDefault();
+    runtime.preferences.zoom = clamp(Number((runtime.preferences.zoom + (event.shiftKey ? -0.1 : 0.1)).toFixed(2)), 0.25, 1.5);
+    savePreferences();
+    render();
     return;
   }
 
@@ -944,12 +1325,15 @@ window.addEventListener("keydown", (event) => {
   }
   if (typing) return;
 
-  if (event.key.toLowerCase() === "v" || event.key.toLowerCase() === "h") {
-    runtime.preferences.tool = event.key.toLowerCase() === "v" ? "select" : "hand";
+  const shortcutTool = !command && !event.altKey ? resolveToolShortcut(event.key) : null;
+  if (shortcutTool) {
+    runtime.preferences.tool = shortcutTool;
     savePreferences();
     render();
+    return;
   }
-  if ((event.key === "Delete" || event.key === "Backspace") && selectedElements().length) {
+  const selectedRaster = activePage().rasterLayers.some((layer) => layer.id === runtime.selectedId);
+  if ((event.key === "Delete" || event.key === "Backspace") && (selectedElements().length || selectedRaster)) {
     event.preventDefault();
     deleteSelected();
     rerender("ลบองค์ประกอบแล้ว");

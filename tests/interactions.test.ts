@@ -1,0 +1,65 @@
+import { describe, expect, it } from "vitest";
+import {
+  buildPixelSelection,
+  clientToPagePoint,
+  isEraserToolId,
+  isUsablePixelSelection,
+  rasterStrokeKindForToolId,
+  selectionModeForToolId,
+} from "../src/editor/interactions";
+import { rasterDimensionError } from "../src/editor/raster";
+
+describe("editor interactions", () => {
+  it("converts pointer coordinates into full-resolution page coordinates", () => {
+    expect(clientToPagePoint(
+      { clientX: 250, clientY: 350, pressure: 0.4 },
+      { left: 50, top: 100, width: 400, height: 500 },
+      { width: 800, height: 1000 },
+    )).toEqual({ x: 400, y: 500, pressure: 0.4 });
+
+    expect(clientToPagePoint(
+      { clientX: -20, clientY: 900, pressure: 0 },
+      { left: 0, top: 0, width: 400, height: 500 },
+      { width: 800, height: 1000 },
+    )).toEqual({ x: 0, y: 1000, pressure: 1 });
+  });
+
+  it("builds normalized rectangular and freehand pixel selections", () => {
+    const rectangle = buildPixelSelection("rectangle", [
+      { x: 80, y: 90, pressure: 1 },
+      { x: 20, y: 30, pressure: 1 },
+    ]);
+    expect(rectangle).toMatchObject({ x: 20, y: 30, width: 60, height: 60 });
+    expect(isUsablePixelSelection(rectangle)).toBe(true);
+
+    const lasso = buildPixelSelection("lasso", [
+      { x: 12, y: 25, pressure: 1 },
+      { x: 32, y: 9, pressure: 1 },
+      { x: 50, y: 40, pressure: 1 },
+    ]);
+    expect(lasso).toMatchObject({ x: 12, y: 9, width: 38, height: 31 });
+    expect(lasso?.points).toHaveLength(3);
+  });
+
+  it("maps selection, shape, fill, and eraser tools to real engine primitives", () => {
+    expect(selectionModeForToolId("elliptical-marquee")).toBe("ellipse");
+    expect(selectionModeForToolId("selection-pen")).toBe("lasso");
+    expect(selectionModeForToolId("magic-wand")).toBeNull();
+    expect(rasterStrokeKindForToolId("paint-bucket")).toBe("bucket");
+    expect(rasterStrokeKindForToolId("contiguous-fill")).toBe("bucket");
+    expect(rasterStrokeKindForToolId("magic-eraser")).toBe("erase-fill");
+    expect(rasterStrokeKindForToolId("gradient")).toBe("gradient");
+    expect(rasterStrokeKindForToolId("rounded-rectangle")).toBe("rectangle");
+    expect(rasterStrokeKindForToolId("g-pen")).toBe("stroke");
+    expect(isEraserToolId("background-eraser")).toBe(true);
+    expect(isEraserToolId("eraser")).toBe(true);
+    expect(isEraserToolId("brush")).toBe(false);
+  });
+
+  it("rejects unsafe full-resolution raster dimensions with a clear reason", () => {
+    expect(rasterDimensionError(794, 1123)).toBeNull();
+    expect(rasterDimensionError(20_000, 1000)).toContain("16,384");
+    expect(rasterDimensionError(8000, 8000)).toContain("32,000,000");
+    expect(rasterDimensionError(Number.NaN, 1000)).toBe("ขนาด Raster ไม่ถูกต้อง");
+  });
+});
