@@ -505,6 +505,10 @@ async function handleAction(action: string): Promise<void> {
     importProjectFile();
     return;
   }
+  if (action === "open-upload") {
+    document.querySelector<HTMLInputElement>("[data-upload-input]")?.click();
+    return;
+  }
   if (action === "add-panel") return runMutation(addPanel, "เพิ่มช่องใหม่แล้ว");
   if (action === "add-text") return runMutation(() => addTextElement(false), "เพิ่มข้อความแล้ว");
   if (action === "add-title") return runMutation(() => addTextElement(true), "เพิ่มหัวเรื่องแล้ว");
@@ -665,9 +669,13 @@ appRoot.addEventListener("click", (event) => {
 appRoot.addEventListener("change", (event) => {
   const target = event.target as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement;
   if (target.matches("[data-upload-input]") && target instanceof HTMLInputElement) {
-    void handleUploads(target.files)
+    const input = target;
+    void handleUploads(input.files)
       .then((count) => rerender(`เพิ่มรูป ${count} ไฟล์แล้ว`))
-      .catch((error: unknown) => showToast(error instanceof Error ? error.message : "เพิ่มรูปไม่สำเร็จ", "danger"));
+      .catch((error: unknown) => showToast(error instanceof Error ? error.message : "เพิ่มรูปไม่สำเร็จ", "danger"))
+      .finally(() => {
+        input.value = "";
+      });
     return;
   }
 

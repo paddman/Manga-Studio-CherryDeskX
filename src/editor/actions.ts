@@ -91,7 +91,13 @@ function imageDimensions(src: string): Promise<{ width: number; height: number }
   });
 }
 
-async function readAsset(file: File): Promise<{ asset: MangaAsset; image: ImageElement }> {
+interface LoadedAsset {
+  asset: MangaAsset;
+  image: ImageElement;
+  blob: Blob;
+}
+
+async function readAsset(file: File): Promise<LoadedAsset> {
   await validateImageFile(file);
   const blob = file.name.toLowerCase().endsWith(".svg")
     ? new Blob([sanitizeSvg(await file.text())], { type: "image/svg+xml" })
@@ -112,16 +118,15 @@ async function readAsset(file: File): Promise<{ asset: MangaAsset; image: ImageE
     createdAt: new Date().toISOString(),
   };
   const image = { ...createImage(file.name, src, 120, 140, width, height), assetId: asset.id };
-  return { asset, image };
+  return { asset, image, blob };
 }
 
 export async function handleUploads(files: FileList | null, replaceSelected = false): Promise<number> {
   if (!files?.length) return 0;
   const loaded = await Promise.all([...files].map(readAsset));
   await Promise.all(
-    loaded.map(async ({ asset }) => {
-      const response = await fetch(asset.src);
-      await runtime.persistence.assets.put(asset.id, await response.blob());
+    loaded.map(async ({ asset, blob }) => {
+      await runtime.persistence.assets.put(asset.id, blob);
       runtime.assetSources.set(asset.id, asset.src);
     }),
   );

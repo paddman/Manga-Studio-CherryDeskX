@@ -138,7 +138,8 @@ function renderAssetsPanel(): string {
     .join("");
   return `
     <div class="panel-heading"><div><span class="eyebrow">LIBRARY</span><h2>รูปและองค์ประกอบ</h2></div><span class="count-badge">${runtime.project.assets.length}</span></div>
-    <label class="upload-zone">${icon("plus")}<strong>อัปโหลดรูป</strong><span>PNG, JPG, WEBP หรือ SVG</span><input type="file" data-upload-input accept="image/png,image/jpeg,image/webp,image/svg+xml" multiple hidden/></label>
+    <button type="button" class="upload-zone" data-action="open-upload">${icon("plus")}<strong>อัปโหลดรูป</strong><span>PNG, JPG, WEBP หรือ SVG</span></button>
+    <input type="file" data-upload-input accept="image/png,image/jpeg,image/webp,image/svg+xml" multiple hidden aria-label="เลือกไฟล์รูป" />
     <div class="asset-grid">${cards}</div>
     <button class="wide-action subtle" data-action="remove-orphans" ${runtime.project.assets.length ? "" : "disabled"}>ล้างรูปที่ไม่ได้ใช้</button>
     <div class="sidebar-note">ไฟล์ binary เก็บใน IndexedDB แยกจาก project JSON แล้ว ระบบ Cloud Asset Library จะแสดงสถานะเชื่อมต่อเมื่อ CherryDeskX API พร้อม</div>

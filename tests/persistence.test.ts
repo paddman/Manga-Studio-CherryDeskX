@@ -3,6 +3,7 @@ import { createStarterProject } from "../src/sample";
 import { MemoryAssetRepository } from "../src/persistence/repository";
 import { exportProjectBundle, importProjectBundle } from "../src/persistence/archive";
 import { migrateProject, serializeProject } from "../src/persistence/serialization";
+import { validateImageFile } from "../src/security/files";
 
 describe("project persistence", () => {
   it("migrates the MVP shape and removes image sources from project JSON", () => {
@@ -33,5 +34,10 @@ describe("project persistence", () => {
     expect(imported.project.pages).toHaveLength(project.pages.length);
     expect(imported.assets.get(firstAsset.id)).toBeDefined();
     expect(await imported.assets.get(firstAsset.id)?.text()).toBe("binary-image");
+  });
+
+  it("accepts a real PNG file without relying on its browser MIME value", async () => {
+    const file = new File([Uint8Array.of(0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a)], "page.PNG", { type: "" });
+    await expect(validateImageFile(file)).resolves.toBeUndefined();
   });
 });

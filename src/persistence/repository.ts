@@ -144,9 +144,84 @@ export class MemoryAssetRepository implements AssetRepository {
   }
 }
 
+class ResilientProjectRepository implements ProjectRepository {
+  private useFallback = false;
+
+  constructor(private readonly primary: ProjectRepository, private readonly fallback: ProjectRepository) {}
+
+  async load(): Promise<PersistedProject | null> {
+    if (this.useFallback) return this.fallback.load();
+    try {
+      return await this.primary.load();
+    } catch {
+      this.useFallback = true;
+      return this.fallback.load();
+    }
+  }
+
+  async save(project: PersistedProject): Promise<void> {
+    if (this.useFallback) return this.fallback.save(project);
+    try {
+      await this.primary.save(project);
+    } catch {
+      this.useFallback = true;
+      await this.fallback.save(project);
+    }
+  }
+}
+
+class ResilientAssetRepository implements AssetRepository {
+  private useFallback = false;
+
+  constructor(private readonly primary: AssetRepository, private readonly fallback: AssetRepository) {}
+
+  async put(assetId: string, blob: Blob): Promise<void> {
+    if (this.useFallback) return this.fallback.put(assetId, blob);
+    try {
+      await this.primary.put(assetId, blob);
+    } catch {
+      this.useFallback = true;
+      await this.fallback.put(assetId, blob);
+    }
+  }
+
+  async get(assetId: string): Promise<Blob | null> {
+    if (this.useFallback) return this.fallback.get(assetId);
+    try {
+      return await this.primary.get(assetId);
+    } catch {
+      this.useFallback = true;
+      return this.fallback.get(assetId);
+    }
+  }
+
+  async remove(assetId: string): Promise<void> {
+    if (this.useFallback) return this.fallback.remove(assetId);
+    try {
+      await this.primary.remove(assetId);
+    } catch {
+      this.useFallback = true;
+      await this.fallback.remove(assetId);
+    }
+  }
+
+  async listIds(): Promise<string[]> {
+    if (this.useFallback) return this.fallback.listIds();
+    try {
+      return await this.primary.listIds();
+    } catch {
+      this.useFallback = true;
+      return this.fallback.listIds();
+    }
+  }
+}
+
 export function createPersistenceRepositories(): PersistenceRepositories {
   if (typeof indexedDB !== "undefined") {
-    return { projects: new IndexedDbProjectRepository(), assets: new IndexedDbAssetRepository() };
+    return {
+      projects: new ResilientProjectRepository(new IndexedDbProjectRepository(), new LocalStorageProjectRepository()),
+      assets: new ResilientAssetRepository(new IndexedDbAssetRepository(), new MemoryAssetRepository()),
+    };
   }
   return { projects: new LocalStorageProjectRepository(), assets: new MemoryAssetRepository() };
 }
