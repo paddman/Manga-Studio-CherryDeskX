@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { alignSelected, clamp, distributeSelected } from "../src/editor/actions";
+import { alignSelected, clamp, distributeSelected, resetImageEdits } from "../src/editor/actions";
 import { runtime, selectedElements, setSelection } from "../src/editor/state";
-import { createPanel, createText } from "../src/sample";
+import { createImage, createPanel, createText } from "../src/sample";
 import type { MangaProject } from "../src/types";
 
 function testProject(): MangaProject {
@@ -37,5 +37,24 @@ describe("editor actions", () => {
     distributeSelected("horizontal");
     expect(elements[1]!.x).toBeGreaterThan(elements[0]!.x);
     expect(elements[2]!.x).toBeGreaterThan(elements[1]!.x);
+  });
+
+  it("resets image editing values without changing its placement", () => {
+    const project = testProject();
+    const image = createImage("รูป", "blob:test", 90, 120, 200, 180);
+    image.grayscale = 75;
+    image.contrast = 180;
+    image.crop = { x: 0.1, y: 0.9, scale: 2.5 };
+    image.flipX = true;
+    project.pages[0]!.elements.push(image);
+    runtime.project = project;
+    setSelection([image.id]);
+    resetImageEdits();
+    expect(image.x).toBe(90);
+    expect(image.y).toBe(120);
+    expect(image.grayscale).toBe(0);
+    expect(image.contrast).toBe(100);
+    expect(image.crop).toEqual({ x: 0.5, y: 0.5, scale: 1 });
+    expect(image.flipX).toBe(false);
   });
 });

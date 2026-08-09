@@ -396,6 +396,20 @@ export function setCropValue(axis: "x" | "y" | "scale", value: number): void {
   });
 }
 
+export function resetImageEdits(): void {
+  const element = selectedElement();
+  if (!element || element.kind !== "image") return;
+  transact(() => {
+    element.fit = "cover";
+    element.grayscale = 0;
+    element.contrast = 100;
+    element.borderRadius = 0;
+    element.crop = { x: 0.5, y: 0.5, scale: 1 };
+    element.flipX = false;
+    element.flipY = false;
+  });
+}
+
 export function addVolume(): void {
   transact(() => {
     const id = uid("volume");

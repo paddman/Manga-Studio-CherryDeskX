@@ -131,6 +131,7 @@ function renderLeftContent(): string {
 }
 
 function renderAssetsPanel(): string {
+  const selected = selectedElement();
   const cards = runtime.project.assets
     .map(
       (asset) => `<button class="asset-card" data-add-asset="${asset.id}" title="เพิ่ม ${escapeHtml(asset.name)} ลงหน้า"><img src="${asset.src}" alt="${escapeHtml(asset.name)}"/><span>${escapeHtml(asset.name)}</span></button>`,
@@ -138,12 +139,17 @@ function renderAssetsPanel(): string {
     .join("");
   return `
     <div class="panel-heading"><div><span class="eyebrow">LIBRARY</span><h2>รูปและองค์ประกอบ</h2></div><span class="count-badge">${runtime.project.assets.length}</span></div>
+    ${selected?.kind === "image" ? renderImageTools(selected) : ""}
     <button type="button" class="upload-zone" data-action="open-upload">${icon("plus")}<strong>อัปโหลดรูป</strong><span>PNG, JPG, WEBP หรือ SVG</span></button>
     <input type="file" data-upload-input accept="image/png,image/jpeg,image/webp,image/svg+xml" multiple hidden aria-label="เลือกไฟล์รูป" />
     <div class="asset-grid">${cards}</div>
     <button class="wide-action subtle" data-action="remove-orphans" ${runtime.project.assets.length ? "" : "disabled"}>ล้างรูปที่ไม่ได้ใช้</button>
     <div class="sidebar-note">ไฟล์ binary เก็บใน IndexedDB แยกจาก project JSON แล้ว ระบบ Cloud Asset Library จะแสดงสถานะเชื่อมต่อเมื่อ CherryDeskX API พร้อม</div>
   `;
+}
+
+function renderImageTools(element: ImageElement): string {
+  return `<section class="image-tools" data-image-tools><div class="image-tools-heading"><div><span class="eyebrow">IMAGE TOOLS</span><h3>แก้ไขรูป</h3></div><span class="beta-badge">LOCAL</span></div><div class="image-tools-actions"><button data-action="enter-crop">${runtime.preferences.cropElementId === element.id ? "ออกจาก Crop" : "Crop"}</button><button data-action="replace-image">เปลี่ยนรูป</button><button data-action="reset-image-edits">รีเซ็ต</button></div><label class="field-block"><span>การพอดีกรอบ</span><select data-element-prop="fit">${option("cover", "เต็มกรอบ (Crop)", element.fit)}${option("contain", "เห็นทั้งรูป", element.fit)}${option("stretch", "ยืดอิสระ", element.fit)}</select></label><div class="image-tools-sliders"><label class="field-block"><span>ขาวดำ <output>${element.grayscale}%</output></span><input type="range" data-element-prop="grayscale" value="${element.grayscale}" min="0" max="100" step="1"/></label><label class="field-block"><span>Contrast <output>${element.contrast}%</output></span><input type="range" data-element-prop="contrast" value="${element.contrast}" min="0" max="250" step="1"/></label></div><div class="image-tools-actions"><button data-action="flip-horizontal">กลับซ้าย–ขวา</button><button data-action="flip-vertical">กลับบน–ล่าง</button></div><div class="image-tools-hint">ลากรูปเพื่อจัดตำแหน่ง • ดับเบิลคลิกเพื่อเข้า Crop mode</div></section>`;
 }
 
 function renderPanelsPanel(): string {
@@ -195,6 +201,8 @@ function renderAiPanel(): string {
 function renderStage(): string {
   const page = activePage();
   const prefs = runtime.preferences;
+  const selected = selectedElement();
+  const image = selected?.kind === "image" ? selected : null;
   const elements = page.elements.filter((element) => !element.parentId).map((element, index) => renderCanvasElement(element, index, page.elements)).join("");
   const guides = runtime.selectionGuides.map((guide) => guide.axis === "x"
     ? `<div class="dynamic-guide guide-x" style="left:${guide.position}px"><span>${guide.label ?? ""}</span></div>`
@@ -206,6 +214,7 @@ function renderStage(): string {
     <section class="stage-column">
       <div class="stage-meta"><div><span class="page-name">${escapeHtml(page.name)}</span><span>${page.width} × ${page.height}px</span></div><div class="stage-hint">ลากเพื่อขยับ • ดึงจุดเพื่อย่อ/ขยาย • ปุ่มบนเพื่อหมุน</div></div>
       <div class="stage-viewport ${prefs.tool === "hand" ? "hand-mode" : ""}" data-stage-viewport>
+        ${image ? `<div class="stage-image-toolbar" aria-label="เครื่องมือแต่งรูป"><strong>แก้ไขรูป</strong><button data-action="enter-crop">${prefs.cropElementId === image.id ? "ออกจาก Crop" : "Crop"}</button><button data-action="replace-image">เปลี่ยนรูป</button><button data-action="reset-image-edits">รีเซ็ต</button></div>` : ""}
         <div class="canvas-sizer" style="width:${Math.round(page.width * prefs.zoom)}px;height:${Math.round(page.height * prefs.zoom)}px">
           <div id="pageCanvas" class="page-canvas ${prefs.showGrid ? "show-grid" : ""}" data-page-canvas style="width:${page.width}px;height:${page.height}px;background:${page.background};transform:scale(${prefs.zoom})">
             ${prefs.showSafeArea ? `<div class="safe-area"></div>` : ""}${guides}${rectangle}${elements}
