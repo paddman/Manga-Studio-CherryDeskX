@@ -89,7 +89,7 @@ describe("project persistence", () => {
       blendMode: "source-over" as const,
       bitmapKey: "project/page/raster-test",
       mask: { enabled: true, inverted: false, selection: { mode: "ellipse" as const, points: [{ x: 0, y: 0, pressure: 1 }, { x: 40, y: 30, pressure: 1 }], x: 0, y: 0, width: 40, height: 30 } },
-      strokes: [{ id: "stroke-1", kind: "bucket" as const, preset: "paint-bucket", points: [{ x: 2, y: 3, pressure: 1 }], color: "#000", size: 5, opacity: 1, blendMode: "source-over" as const, preserveAlpha: true, tolerance: 18 }],
+      strokes: [{ id: "stroke-1", kind: "bucket" as const, preset: "paint-bucket", points: [{ x: 2, y: 3, pressure: 1 }], color: "#000", size: 5, opacity: 1, blendMode: "source-over" as const, preserveAlpha: true, tolerance: 18, mirrorAxis: { kind: "symmetry" as const, start: { x: 50, y: 0, pressure: 1 }, end: { x: 50, y: 100, pressure: 1 } } }],
     };
     page.rasterLayers.push(layer);
     page.layerOrder.push(layer.id);
@@ -103,6 +103,7 @@ describe("project persistence", () => {
     expect(imported.project.pages[0]?.rasterLayers[0]?.strokes[0]?.tolerance).toBe(18);
     expect(imported.project.pages[0]?.rasterLayers[0]?.mask?.selection.mode).toBe("ellipse");
     expect(imported.project.pages[0]?.rasterLayers[0]?.strokes[0]?.preserveAlpha).toBe(true);
+    expect(imported.project.pages[0]?.rasterLayers[0]?.strokes[0]?.mirrorAxis).toMatchObject({ kind: "symmetry", start: { x: 50 }, end: { y: 100 } });
     expect(await imported.rasters.get(layer.bitmapKey)?.text()).toBe("raster-png");
   });
 

@@ -53,6 +53,13 @@ export interface RasterStroke {
   selection?: PixelSelectionShape;
   preserveAlpha?: boolean;
   tolerance?: number;
+  mirrorAxis?: RasterRulerAxis;
+}
+
+export interface RasterRulerAxis {
+  kind: "straight" | "symmetry";
+  start: RasterPoint;
+  end: RasterPoint;
 }
 
 export interface RasterLayer {
@@ -292,6 +299,7 @@ export interface EditorPreferences {
   exportCropMarks: boolean;
   canvasRotation: number;
   showNavigator: boolean;
+  rasterRuler: RasterRulerAxis | null;
 }
 
 export interface SelectionGuide {

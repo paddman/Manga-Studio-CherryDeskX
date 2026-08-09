@@ -30,6 +30,8 @@ describe("typed tool registry", () => {
     expect(TOOL_DEFINITIONS.find((tool) => tool.id === "blur")?.engine).toBe("raster-retouch");
     expect(TOOL_DEFINITIONS.find((tool) => tool.id === "red-eye")?.capability).toBe("experimental");
     expect(TOOL_DEFINITIONS.find((tool) => tool.id === "spot-healing")?.capability).toBe("adapter");
+    expect(TOOL_DEFINITIONS.find((tool) => tool.id === "straight-ruler")?.engine).toBe("raster-ruler");
+    expect(TOOL_DEFINITIONS.find((tool) => tool.id === "symmetry-ruler")?.capability).toBe("experimental");
   });
 
   it("resolves the standard keymap and supports a typed custom keymap", () => {

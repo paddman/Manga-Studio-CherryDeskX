@@ -2,6 +2,7 @@ import { brushPreset } from "./tools";
 import type { MangaPage, PixelSelectionShape, RasterLayer, RasterPoint, RasterStroke } from "../types";
 import { isRasterLayer, orderedPageLayers } from "./layers";
 import { applyRetouchPixels, isLocalRetouchPreset } from "./retouch";
+import { mirrorPointAcrossRuler } from "./interactions";
 
 export const MAX_RASTER_DIMENSION = 16_384;
 export const MAX_RASTER_PIXELS = 32_000_000;
@@ -223,9 +224,9 @@ function drawSpray(ctx: CanvasRenderingContext2D, points: RasterPoint[], size: n
   }
 }
 
-function drawMangaEffectStroke(ctx: CanvasRenderingContext2D, stroke: RasterStroke, width: number, height: number): boolean {
-  const start = stroke.points[0];
-  const end = stroke.points.at(-1);
+function drawMangaEffectStroke(ctx: CanvasRenderingContext2D, stroke: RasterStroke, width: number, height: number, points: RasterPoint[]): boolean {
+  const start = points[0];
+  const end = points.at(-1);
   if (!start || !end) return false;
   if (stroke.preset === "focus-line") {
     const radius = Math.max(width, height) * 1.1;
@@ -259,16 +260,15 @@ function drawMangaEffectStroke(ctx: CanvasRenderingContext2D, stroke: RasterStro
   if (stroke.preset === "effect-line") {
     for (let offset = -1; offset <= 1; offset += 1) {
       ctx.globalAlpha = stroke.opacity * (offset === 0 ? 1 : 0.35);
-      drawPolyline(ctx, stroke.points.map((point, index) => ({ ...point, y: point.y + offset * (2 + (index % 3)) })));
+      drawPolyline(ctx, points.map((point, index) => ({ ...point, y: point.y + offset * (2 + (index % 3)) })));
     }
     return true;
   }
   return false;
 }
 
-function drawBrushStroke(ctx: CanvasRenderingContext2D, stroke: RasterStroke, width: number, height: number): void {
+function drawBrushPath(ctx: CanvasRenderingContext2D, stroke: RasterStroke, width: number, height: number, points: RasterPoint[]): void {
   const preset = brushPreset(stroke.preset);
-  const points = stroke.points;
   if (!points.length) return;
   const size = Math.max(1, stroke.size * preset.sizeMultiplier);
   ctx.globalCompositeOperation = stroke.blendMode;
@@ -279,7 +279,7 @@ function drawBrushStroke(ctx: CanvasRenderingContext2D, stroke: RasterStroke, wi
   ctx.lineWidth = size;
   ctx.globalAlpha = Math.min(1, Math.max(0, stroke.opacity * preset.opacity));
 
-  if (drawMangaEffectStroke(ctx, stroke, width, height)) return;
+  if (drawMangaEffectStroke(ctx, stroke, width, height, points)) return;
 
   if (preset.engine === "eraser") {
     for (const point of points) drawSoftStamp(ctx, point, size, "#000000", stroke.opacity * preset.opacity, preset.hardness);
@@ -306,6 +306,14 @@ function drawBrushStroke(ctx: CanvasRenderingContext2D, stroke: RasterStroke, wi
     return;
   }
   drawPolyline(ctx, points);
+}
+
+function drawBrushStroke(ctx: CanvasRenderingContext2D, stroke: RasterStroke, width: number, height: number): void {
+  drawBrushPath(ctx, stroke, width, height, stroke.points);
+  const axis = stroke.mirrorAxis;
+  if (axis?.kind === "symmetry") {
+    drawBrushPath(ctx, stroke, width, height, stroke.points.map((point) => mirrorPointAcrossRuler(point, axis)));
+  }
 }
 
 function drawShape(ctx: CanvasRenderingContext2D, stroke: RasterStroke): void {

@@ -71,6 +71,7 @@ function loadPreferences(): EditorPreferences {
     exportCropMarks: false,
     canvasRotation: 0,
     showNavigator: false,
+    rasterRuler: null,
   };
   if (typeof localStorage === "undefined") return defaults;
   try {
@@ -91,6 +92,13 @@ function loadPreferences(): EditorPreferences {
       exportCropMarks: parsed.exportCropMarks === true,
       canvasRotation: typeof parsed.canvasRotation === "number" && Number.isFinite(parsed.canvasRotation) ? Math.max(-180, Math.min(180, parsed.canvasRotation)) : defaults.canvasRotation,
       showNavigator: parsed.showNavigator === true,
+      rasterRuler: parsed.rasterRuler && (parsed.rasterRuler.kind === "straight" || parsed.rasterRuler.kind === "symmetry")
+        ? {
+            kind: parsed.rasterRuler.kind,
+            start: { x: Number(parsed.rasterRuler.start?.x) || 0, y: Number(parsed.rasterRuler.start?.y) || 0, pressure: 1 },
+            end: { x: Number(parsed.rasterRuler.end?.x) || 0, y: Number(parsed.rasterRuler.end?.y) || 0, pressure: 1 },
+          }
+        : null,
     };
   } catch {
     return defaults;

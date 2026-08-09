@@ -1,4 +1,4 @@
-import type { PixelSelectionShape, RasterPoint, RasterStrokeKind } from "../types";
+import type { PixelSelectionShape, RasterPoint, RasterRulerAxis, RasterStrokeKind } from "../types";
 
 export interface ClientPoint {
   clientX: number;
@@ -27,6 +27,20 @@ export function clientToPagePoint(
     y: clampNumber((point.clientY - viewport.top) * (pageSize.height / Math.max(1, viewport.height)), 0, pageSize.height),
     pressure: clampNumber(point.pressure || 1, 0.05, 1),
   };
+}
+
+export function projectPointToRuler(point: RasterPoint, axis: RasterRulerAxis): RasterPoint {
+  const dx = axis.end.x - axis.start.x;
+  const dy = axis.end.y - axis.start.y;
+  const lengthSquared = dx * dx + dy * dy;
+  if (lengthSquared < 0.0001) return { ...point };
+  const ratio = ((point.x - axis.start.x) * dx + (point.y - axis.start.y) * dy) / lengthSquared;
+  return { x: axis.start.x + dx * ratio, y: axis.start.y + dy * ratio, pressure: point.pressure };
+}
+
+export function mirrorPointAcrossRuler(point: RasterPoint, axis: RasterRulerAxis): RasterPoint {
+  const projected = projectPointToRuler(point, axis);
+  return { x: projected.x * 2 - point.x, y: projected.y * 2 - point.y, pressure: point.pressure };
 }
 
 export function rotatedViewportSize(width: number, height: number, zoom: number, rotationDegrees: number): { width: number; height: number } {

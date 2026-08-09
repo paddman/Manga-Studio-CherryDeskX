@@ -263,15 +263,20 @@ function renderStage(): string {
       ? `<canvas class="pixel-selection-canvas" data-pixel-selection-canvas width="${page.width}" height="${page.height}"></canvas>`
       : `<div class="pixel-selection selection-mode-${runtime.pixelSelection.mode}" style="left:${runtime.pixelSelection.x}px;top:${runtime.pixelSelection.y}px;width:${runtime.pixelSelection.width}px;height:${runtime.pixelSelection.height}px"></div>`
     : "";
+  const ruler = prefs.rasterRuler;
+  const rulerGuide = ruler
+    ? `<div class="raster-ruler ruler-${ruler.kind}" style="left:${ruler.start.x}px;top:${ruler.start.y}px;width:${Math.hypot(ruler.end.x - ruler.start.x, ruler.end.y - ruler.start.y)}px;transform:rotate(${Math.atan2(ruler.end.y - ruler.start.y, ruler.end.x - ruler.start.x) * 180 / Math.PI}deg)"><span>${ruler.kind === "symmetry" ? "แกนสมมาตร" : "ไม้บรรทัดตรง"}</span></div>`
+    : "";
   const rotatedSize = rotatedViewportSize(page.width, page.height, prefs.zoom, prefs.canvasRotation);
   return `
     <section class="stage-column">
       <div class="stage-meta"><div><span class="page-name">${escapeHtml(page.name)}</span><span>${page.width} × ${page.height}px</span><span>Canvas ${Math.round(prefs.canvasRotation)}°</span></div><div class="stage-hint">ลากเพื่อขยับ • ดึงจุดเพื่อย่อ/ขยาย • ปุ่มบนเพื่อหมุน</div></div>
       <div class="stage-viewport ${prefs.tool === "hand" ? "hand-mode" : ""}" data-stage-viewport>
         ${image ? `<div class="stage-image-toolbar" aria-label="เครื่องมือแต่งรูป"><strong>แก้ไขรูป</strong><button data-action="enter-crop">${prefs.cropElementId === image.id ? "เสร็จสิ้น Crop" : "เลือกพื้นที่ Crop"}</button><button data-action="replace-image">เปลี่ยนรูป</button><button data-action="reset-image-edits">รีเซ็ต</button></div>` : ""}
+        ${ruler ? `<div class="raster-ruler-toolbar"><strong>${ruler.kind === "symmetry" ? "Symmetry Ruler" : "Straight Ruler"}</strong><button data-action="clear-raster-ruler">ปิดไม้บรรทัด</button></div>` : ""}
         <div class="canvas-sizer" style="width:${Math.ceil(rotatedSize.width)}px;height:${Math.ceil(rotatedSize.height)}px">
           <div id="pageCanvas" class="page-canvas ${prefs.showGrid ? "show-grid" : ""}" data-page-canvas style="left:50%;top:50%;width:${page.width}px;height:${page.height}px;background:${page.background};background-size:${Math.max(4, runtime.project.gutter)}px ${Math.max(4, runtime.project.gutter)}px;transform-origin:center;transform:translate(-50%,-50%) rotate(${prefs.canvasRotation}deg) scale(${prefs.zoom})">
-            ${prefs.showSafeArea ? `<div class="safe-area" style="inset:${runtime.project.safeArea}px"></div>` : ""}${layers}${guides}${rectangle}${pixelSelection}
+            ${prefs.showSafeArea ? `<div class="safe-area" style="inset:${runtime.project.safeArea}px"></div>` : ""}${layers}${guides}${rulerGuide}${rectangle}${pixelSelection}
           </div>
         </div>
         ${prefs.showNavigator ? renderNavigator() : ""}

@@ -36,6 +36,7 @@ A pointer drag calls `checkpoint()` once at pointer-down and persists once at po
 - `selectedIds` supports Shift-click and marquee multi-selection. Snapping candidates include page edges/center and non-selected element edges/centers. Guides are transient runtime state.
 - `MangaPage.rasterLayers` and `layerOrder` form one low-to-high stack shared by editor, inspector, archive and export.
 - Raster strokes are replayable Canvas commands. They support geometric and contiguous selections, fill/erase, alpha lock, optional masks, manga tones/effect lines, deterministic local retouch filters and moving the latest stroke to a new layer.
+- Straight and symmetry rulers are editor preferences rather than page artwork. Straight rulers project pointer samples onto an axis; symmetry strokes persist their mirror axis so replay, undo and export remain deterministic.
 - Browser guardrails reject unsafe full-resolution canvas dimensions with a readable Thai error instead of crashing the tab.
 - Thai/Latin word segmentation and basic Japanese kinsoku wrapping live in `typography.ts`, so auto-fit and exported lettering make the same line-break decisions.
 

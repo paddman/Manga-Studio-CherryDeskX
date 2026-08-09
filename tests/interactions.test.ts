@@ -6,6 +6,8 @@ import {
   clientToRotatedPagePoint,
   isEraserToolId,
   isUsablePixelSelection,
+  mirrorPointAcrossRuler,
+  projectPointToRuler,
   rasterStrokeKindForToolId,
   selectionModeForToolId,
   rotatedViewportSize,
@@ -54,6 +56,13 @@ describe("editor interactions", () => {
     ]);
     expect(lasso).toMatchObject({ x: 12, y: 9, width: 38, height: 31 });
     expect(lasso?.points).toHaveLength(3);
+  });
+
+  it("projects straight-ruler strokes and mirrors symmetry-ruler strokes", () => {
+    const horizontal = { kind: "straight" as const, start: { x: 0, y: 20, pressure: 1 }, end: { x: 100, y: 20, pressure: 1 } };
+    expect(projectPointToRuler({ x: 35, y: 52, pressure: 0.6 }, horizontal)).toEqual({ x: 35, y: 20, pressure: 0.6 });
+    const vertical = { kind: "symmetry" as const, start: { x: 50, y: 0, pressure: 1 }, end: { x: 50, y: 100, pressure: 1 } };
+    expect(mirrorPointAcrossRuler({ x: 30, y: 40, pressure: 0.8 }, vertical)).toEqual({ x: 70, y: 40, pressure: 0.8 });
   });
 
   it("builds exact contiguous pixel spans for Magic Wand and Quick Selection", () => {

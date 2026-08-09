@@ -21,6 +21,7 @@ export type ToolEngine =
   | "raster-gradient"
   | "raster-shape"
   | "raster-retouch"
+  | "raster-ruler"
   | "element-rotate"
   | "element-flip"
   | "element-free-transform"
@@ -172,6 +173,7 @@ function engineFor(id: string): ToolEngine | undefined {
   if (id === "gradient") return "raster-gradient";
   if (SHAPE_ENGINES.has(id)) return "raster-shape";
   if (RETOUCH_ENGINES.has(id)) return "raster-retouch";
+  if (id === "straight-ruler" || id === "symmetry-ruler") return "raster-ruler";
   if (id === "rotate") return "element-rotate";
   if (id === "flip") return "element-flip";
   if (id === "free-transform") return "element-free-transform";

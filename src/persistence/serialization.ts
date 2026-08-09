@@ -265,6 +265,9 @@ function normalizeStroke(value: unknown, index: number): RasterStroke | null {
   const blendMode = value.blendMode === "destination-out" || value.blendMode === "multiply" || value.blendMode === "screen" || value.blendMode === "overlay"
     ? value.blendMode
     : "source-over";
+  const mirrorRecord = isRecord(value.mirrorAxis) ? value.mirrorAxis : null;
+  const mirrorStart = mirrorRecord ? normalizePoint(mirrorRecord.start) : null;
+  const mirrorEnd = mirrorRecord ? normalizePoint(mirrorRecord.end) : null;
   return {
     id: stringValue(value.id, `stroke_migrated_${index}`),
     kind,
@@ -278,6 +281,9 @@ function normalizeStroke(value: unknown, index: number): RasterStroke | null {
     selection: normalizeSelection(value.selection),
     preserveAlpha: booleanValue(value.preserveAlpha, false),
     tolerance: Math.min(255, Math.max(0, numberValue(value.tolerance, 24))),
+    mirrorAxis: mirrorStart && mirrorEnd && (mirrorRecord?.kind === "straight" || mirrorRecord?.kind === "symmetry")
+      ? { kind: mirrorRecord.kind, start: mirrorStart, end: mirrorEnd }
+      : undefined,
   };
 }
 

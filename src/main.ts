@@ -5,7 +5,7 @@ import { exportProjectBundle, importProjectBundle } from "./persistence/archive"
 import { hydrateAssetSources } from "./persistence/serialization";
 import { renderRasterLayer } from "./editor/raster";
 import { addRasterLayer, applyPixelSelectionAsLayerMask, clearPixelSelection, clearRasterLayer, ensureRasterLayer, invertRasterLayerMask, persistRasterCanvas, recordRasterStroke, removeRasterLayerMask, selectRasterLayer, splitLastStrokeToLayer } from "./editor/raster-actions";
-import { buildContiguousPixelSelection, buildPixelSelection, clientToPagePoint, clientToRotatedPagePoint, isEraserToolId, isUsablePixelSelection, rasterStrokeKindForToolId, selectionModeForToolId } from "./editor/interactions";
+import { buildContiguousPixelSelection, buildPixelSelection, clientToPagePoint, clientToRotatedPagePoint, isEraserToolId, isUsablePixelSelection, projectPointToRuler, rasterStrokeKindForToolId, selectionModeForToolId } from "./editor/interactions";
 import { canUseTool, getToolDefinition, isRasterTool, toolId } from "./editor/tools";
 import {
   addAssetToPage,
@@ -270,6 +270,36 @@ function applyContiguousPixelSelection(event: PointerEvent, tool: Tool): void {
   }
 }
 
+function beginRasterRuler(event: PointerEvent, kind: "straight" | "symmetry"): void {
+  const releasePointer = capturePointer(event);
+  const start = pagePoint(event);
+  runtime.preferences.rasterRuler = { kind, start, end: { ...start } };
+  render();
+  const update = (moveEvent: PointerEvent): void => {
+    const ruler = runtime.preferences.rasterRuler;
+    if (!ruler) return;
+    ruler.end = pagePoint(moveEvent);
+    render();
+  };
+  const end = (): void => {
+    window.removeEventListener("pointermove", update);
+    releasePointer();
+    const ruler = runtime.preferences.rasterRuler;
+    if (!ruler || Math.hypot(ruler.end.x - ruler.start.x, ruler.end.y - ruler.start.y) < 8) {
+      runtime.preferences.rasterRuler = null;
+      render();
+      showToast("ลากแนวไม้บรรทัดให้ยาวอย่างน้อย 8 px", "danger");
+      return;
+    }
+    runtime.preferences.tool = toolId("brush");
+    savePreferences();
+    render();
+    showToast(kind === "symmetry" ? "ตั้งแกนสมมาตรแล้ว • Stroke ถัดไปจะสะท้อนอีกด้าน" : "ตั้งไม้บรรทัดตรงแล้ว • Stroke จะเกาะแนวนี้", "success");
+  };
+  window.addEventListener("pointermove", update);
+  window.addEventListener("pointerup", end, { once: true });
+}
+
 function beginRasterStroke(event: PointerEvent, tool: Tool): void {
   if (["lasso-fill", "enclose-fill", "close-fill"].includes(tool as string) && !runtime.pixelSelection) {
     showToast("ใช้ Lasso หรือ Marquee เลือกพื้นที่ก่อนเติมสี", "danger");
@@ -288,7 +318,13 @@ function beginRasterStroke(event: PointerEvent, tool: Tool): void {
   }
   const releasePointer = capturePointer(event);
   const kind = rasterStrokeKindForToolId(tool as string);
-  const start = pagePoint(event);
+  const ruler = runtime.preferences.rasterRuler;
+  const rulerApplies = kind === "stroke" || kind === "filter";
+  const constrainedPoint = (pointerEvent: PointerEvent): RasterPoint => {
+    const point = pagePoint(pointerEvent);
+    return rulerApplies && ruler?.kind === "straight" ? projectPointToRuler(point, ruler) : point;
+  };
+  const start = constrainedPoint(event);
   const stroke: RasterStroke = {
     id: `stroke_${Date.now()}_${Math.round(Math.random() * 100000)}`,
     kind,
@@ -301,6 +337,7 @@ function beginRasterStroke(event: PointerEvent, tool: Tool): void {
     selection: runtime.pixelSelection ? structuredClone(runtime.pixelSelection) : undefined,
     preserveAlpha: layer.alphaLock,
     tolerance: 24,
+    mirrorAxis: kind === "stroke" && ruler?.kind === "symmetry" ? structuredClone(ruler) : undefined,
   };
   if (!activeRasterCanvas()) render();
   if (kind === "fill" || kind === "bucket" || kind === "erase-fill") {
@@ -314,7 +351,7 @@ function beginRasterStroke(event: PointerEvent, tool: Tool): void {
   }
   runtime.rasterPreview = stroke;
   const update = (moveEvent: PointerEvent): void => {
-    stroke.points.push(pagePoint(moveEvent));
+    stroke.points.push(constrainedPoint(moveEvent));
     const canvas = activeRasterCanvas();
     const activeLayer = activePage().rasterLayers.find((candidate) => candidate.id === runtime.preferences.activeRasterLayerId);
     if (canvas && activeLayer) renderRasterLayer(canvas, activePage(), activeLayer, runtime.rasterPreview);
@@ -334,6 +371,10 @@ function beginRasterStroke(event: PointerEvent, tool: Tool): void {
 
 function applyCanvasTool(event: PointerEvent, tool: Tool): boolean {
   const id = tool as string;
+  if (id === "straight-ruler" || id === "symmetry-ruler") {
+    beginRasterRuler(event, id === "symmetry-ruler" ? "symmetry" : "straight");
+    return true;
+  }
   if (id === "grid") {
     runtime.preferences.showGrid = !runtime.preferences.showGrid;
     savePreferences();
@@ -594,6 +635,13 @@ async function handleAction(action: string): Promise<void> {
   }
   if (action === "open-font-upload") {
     document.querySelector<HTMLInputElement>("[data-font-upload-input]")?.click();
+    return;
+  }
+  if (action === "clear-raster-ruler") {
+    runtime.preferences.rasterRuler = null;
+    savePreferences();
+    render();
+    showToast("ปิดไม้บรรทัดแล้ว", "default");
     return;
   }
   if (action === "add-raster-layer") {
