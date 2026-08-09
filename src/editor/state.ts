@@ -1,6 +1,7 @@
 import { createStarterProject } from "../sample";
 import { createPersistenceRepositories, type PersistenceRepositories } from "../persistence/repository";
 import { hydrateAssetSources, migrateProject, serializeProject } from "../persistence/serialization";
+import { registerProjectFonts } from "./font-assets";
 import { toolId } from "./tools";
 import type { EditorPreferences, MangaElement, MangaPage, MangaProject, PixelSelectionShape, RasterStroke, SelectionGuide } from "../types";
 
@@ -11,6 +12,13 @@ const MAX_HISTORY = 60;
 let saveTimer: ReturnType<typeof setTimeout> | undefined;
 
 export type SaveStatus = "saving" | "saved" | "offline" | "error";
+
+export interface ExportTaskState {
+  status: "idle" | "running" | "cancelled" | "error";
+  completed: number;
+  total: number;
+  label: string;
+}
 
 export interface SelectionRectangle {
   x: number;
@@ -36,6 +44,7 @@ export interface RuntimeState {
   persistence: PersistenceRepositories;
   persistenceReady: boolean;
   clipboard: MangaElement[];
+  exportTask: ExportTaskState;
 }
 
 function loadPreferences(): EditorPreferences {
@@ -53,6 +62,16 @@ function loadPreferences(): EditorPreferences {
     activeRasterLayerId: null,
     exportTransparent: false,
     exportBackgroundColor: "#ffffff",
+    exportFormat: "png",
+    exportScope: "page",
+    exportScaleMode: "2x",
+    exportCustomScale: 1,
+    exportMaxWebtoonHeight: 8000,
+    exportIncludeBleed: false,
+    exportCropMarks: false,
+    canvasRotation: 0,
+    showNavigator: false,
+    rasterRuler: null,
   };
   if (typeof localStorage === "undefined") return defaults;
   try {
@@ -64,6 +83,22 @@ function loadPreferences(): EditorPreferences {
       ...parsed,
       tool: typeof parsed.tool === "string" ? toolId(parsed.tool) : defaults.tool,
       cropElementId: null,
+      exportFormat: parsed.exportFormat === "jpg" || parsed.exportFormat === "pdf" || parsed.exportFormat === "cbz" || parsed.exportFormat === "zip" || parsed.exportFormat === "webtoon" ? parsed.exportFormat : "png",
+      exportScope: parsed.exportScope === "chapter" || parsed.exportScope === "volume" || parsed.exportScope === "project" ? parsed.exportScope : "page",
+      exportScaleMode: parsed.exportScaleMode === "1x" || parsed.exportScaleMode === "300dpi" || parsed.exportScaleMode === "custom" ? parsed.exportScaleMode : "2x",
+      exportCustomScale: typeof parsed.exportCustomScale === "number" && Number.isFinite(parsed.exportCustomScale) ? Math.max(0.25, Math.min(8, parsed.exportCustomScale)) : defaults.exportCustomScale,
+      exportMaxWebtoonHeight: typeof parsed.exportMaxWebtoonHeight === "number" && Number.isFinite(parsed.exportMaxWebtoonHeight) ? Math.max(1000, Math.min(32000, Math.round(parsed.exportMaxWebtoonHeight))) : defaults.exportMaxWebtoonHeight,
+      exportIncludeBleed: parsed.exportIncludeBleed === true,
+      exportCropMarks: parsed.exportCropMarks === true,
+      canvasRotation: typeof parsed.canvasRotation === "number" && Number.isFinite(parsed.canvasRotation) ? Math.max(-180, Math.min(180, parsed.canvasRotation)) : defaults.canvasRotation,
+      showNavigator: parsed.showNavigator === true,
+      rasterRuler: parsed.rasterRuler && (parsed.rasterRuler.kind === "straight" || parsed.rasterRuler.kind === "symmetry")
+        ? {
+            kind: parsed.rasterRuler.kind,
+            start: { x: Number(parsed.rasterRuler.start?.x) || 0, y: Number(parsed.rasterRuler.start?.y) || 0, pressure: 1 },
+            end: { x: Number(parsed.rasterRuler.end?.x) || 0, y: Number(parsed.rasterRuler.end?.y) || 0, pressure: 1 },
+          }
+        : null,
     };
   } catch {
     return defaults;
@@ -97,6 +132,7 @@ export const runtime: RuntimeState = {
   persistence: createPersistenceRepositories(),
   persistenceReady: false,
   clipboard: [],
+  exportTask: { status: "idle", completed: 0, total: 0, label: "" },
 };
 
 export function activePage(): MangaPage {
@@ -192,6 +228,7 @@ export async function initializePersistence(): Promise<void> {
       runtime.assetSources.set(asset.id, objectUrl);
     }
     hydrateAssetSources(runtime.project, sources);
+    await registerProjectFonts(runtime.project);
     runtime.persistenceReady = true;
     runtime.saveStatus = "saved";
     runtime.storageError = null;
@@ -253,6 +290,7 @@ export function transact(mutator: () => void): boolean {
 function restoreSnapshot(value: string): void {
   runtime.project = migrateProject(JSON.parse(value) as unknown);
   hydrateAssetSources(runtime.project, runtime.assetSources);
+  void registerProjectFonts(runtime.project);
   runtime.selectedId = null;
   runtime.selectedIds = [];
   runtime.preferences.cropElementId = null;

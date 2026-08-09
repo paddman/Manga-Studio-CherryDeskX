@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { backgroundForExport, createPdfDocument, createStoreZip, pagesForScope, planWebtoonSlices } from "../src/export";
+import { backgroundForExport, createPdfDocument, createStoreZip, exportScaleForMode, millimetersToPixels, pagesForScope, planWebtoonSlices, renderedPagePixelSize } from "../src/export";
 import { createStarterProject } from "../src/sample";
+import { EXPORT_WORKER_CAPABILITY, HybridWorkerExportJobRunner, InlineExportJobRunner } from "../src/export/runner";
 
 describe("export foundations", () => {
   it("applies alpha and opaque background defaults by format", () => {
@@ -36,5 +37,28 @@ describe("export foundations", () => {
     const project = createStarterProject();
     expect(pagesForScope(project, "page")).toHaveLength(1);
     expect(pagesForScope(project, "project")).toHaveLength(project.pages.length);
+    project.pages.reverse();
+    expect(pagesForScope(project, "chapter").map((page) => page.id)).toEqual(project.chapters[0]?.pageIds);
+  });
+
+  it("resolves export scale modes and print-layout pixel bounds", () => {
+    expect(exportScaleForMode("1x", 7, 300)).toBe(1);
+    expect(exportScaleForMode("2x", 7, 300)).toBe(2);
+    expect(exportScaleForMode("300dpi", 7, 150)).toBe(2);
+    expect(exportScaleForMode("custom", 20, 300)).toBe(8);
+    expect(millimetersToPixels(25.4, 300)).toBeCloseTo(300);
+    const page = createStarterProject().pages[0]!;
+    const plain = renderedPagePixelSize(page, 1);
+    const print = renderedPagePixelSize(page, 1, { bleedMm: 3, dpi: 300, includeBleed: true, cropMarks: true });
+    expect(plain).toEqual({ width: page.width, height: page.height });
+    expect(print.width).toBeGreaterThan(plain.width);
+    expect(print.height).toBeGreaterThan(plain.height);
+  });
+
+  it("exposes an honest hybrid worker boundary with an inline fallback", () => {
+    expect(new InlineExportJobRunner().execution).toBe("inline");
+    expect(new HybridWorkerExportJobRunner().execution).toBe("hybrid-worker");
+    expect(EXPORT_WORKER_CAPABILITY).toMatchObject({ status: "experimental" });
+    expect(EXPORT_WORKER_CAPABILITY.reason).toContain("main thread");
   });
 });

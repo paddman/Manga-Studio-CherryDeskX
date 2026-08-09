@@ -1,18 +1,21 @@
 export type ElementKind = "panel" | "image" | "text" | "bubble";
-export type BubbleVariant = "speech" | "thought" | "shout" | "caption";
+export type BubbleVariant = "speech" | "thought" | "shout" | "whisper" | "caption" | "narration";
 export type ImageFit = "cover" | "contain" | "stretch";
 export type TextAlign = "left" | "center" | "right";
 export type ReadingDirection = "ltr" | "rtl";
 export type PagePreset = "manga-b5" | "manga-a5" | "comic" | "a4" | "webtoon" | "custom";
 export type ColorMode = "rgb" | "cmyk";
 export type WritingMode = "horizontal" | "vertical";
+export type ExportFormat = "png" | "jpg" | "pdf" | "cbz" | "zip" | "webtoon";
+export type ExportScope = "page" | "chapter" | "volume" | "project";
+export type ExportScaleMode = "1x" | "2x" | "300dpi" | "custom";
 
-export const PROJECT_SCHEMA_VERSION = 3;
+export const PROJECT_SCHEMA_VERSION = 6;
 
 export type ToolId = string & { readonly __toolId: unique symbol };
 export type Tool = ToolId;
 
-export type RasterStrokeKind = "stroke" | "line" | "rectangle" | "ellipse" | "polygon" | "fill" | "gradient" | "bucket" | "erase-fill";
+export type RasterStrokeKind = "stroke" | "line" | "rectangle" | "ellipse" | "polygon" | "fill" | "gradient" | "bucket" | "erase-fill" | "filter" | "content-fill";
 export type RasterBlendMode = "source-over" | "destination-out" | "multiply" | "screen" | "overlay";
 
 export interface RasterPoint {
@@ -21,13 +24,20 @@ export interface RasterPoint {
   pressure: number;
 }
 
+export interface PixelSelectionSpan {
+  x: number;
+  y: number;
+  width: number;
+}
+
 export interface PixelSelectionShape {
-  mode: "rectangle" | "ellipse" | "lasso" | "polygon";
+  mode: "rectangle" | "ellipse" | "lasso" | "polygon" | "pixels";
   points: RasterPoint[];
   x: number;
   y: number;
   width: number;
   height: number;
+  spans?: PixelSelectionSpan[];
 }
 
 export interface RasterStroke {
@@ -43,6 +53,13 @@ export interface RasterStroke {
   selection?: PixelSelectionShape;
   preserveAlpha?: boolean;
   tolerance?: number;
+  mirrorAxis?: RasterRulerAxis;
+}
+
+export interface RasterRulerAxis {
+  kind: "straight" | "symmetry";
+  start: RasterPoint;
+  end: RasterPoint;
 }
 
 export interface RasterLayer {
@@ -92,6 +109,8 @@ export interface BaseElement {
   width: number;
   height: number;
   rotation: number;
+  skewX: number;
+  skewY: number;
   opacity: number;
   locked: boolean;
   hidden: boolean;
@@ -138,6 +157,7 @@ export interface TextElement extends BaseElement {
   outlineWidth: number;
   shadowColor: string;
   shadowBlur: number;
+  autoFit: boolean;
 }
 
 export interface BubbleElement extends BaseElement {
@@ -151,6 +171,15 @@ export interface BubbleElement extends BaseElement {
   fontSize: number;
   fontWeight: number;
   align: TextAlign;
+  fontFamily: string;
+  lineHeight: number;
+  letterSpacing: number;
+  writingMode: WritingMode;
+  outlineColor: string;
+  outlineWidth: number;
+  shadowColor: string;
+  shadowBlur: number;
+  autoFit: boolean;
   tailX: number;
   tailY: number;
   tails: BubbleTail[];
@@ -158,14 +187,37 @@ export interface BubbleElement extends BaseElement {
 
 export type MangaElement = PanelElement | ImageElement | TextElement | BubbleElement;
 
+export interface TextStylePreset {
+  id: string;
+  name: string;
+  kind: "text" | "bubble";
+  fontFamily: string;
+  fontSize: number;
+  fontWeight: number;
+  color: string;
+  align: TextAlign;
+  lineHeight: number;
+  letterSpacing: number;
+  writingMode: WritingMode;
+  outlineColor: string;
+  outlineWidth: number;
+  shadowColor: string;
+  shadowBlur: number;
+  background?: string;
+  borderColor?: string;
+  borderWidth?: number;
+}
+
 export interface MangaAsset {
   id: string;
+  kind: "image" | "font";
   name: string;
   src: string;
   mimeType: string;
   byteSize: number;
   width: number;
   height: number;
+  fontFamily?: string;
   createdAt: string;
 }
 
@@ -218,6 +270,7 @@ export interface MangaProject {
   chapters: MangaChapter[];
   pages: MangaPage[];
   assets: MangaAsset[];
+  textStyles: TextStylePreset[];
   createdAt: string;
   updatedAt: string;
 }
@@ -237,6 +290,16 @@ export interface EditorPreferences {
   activeRasterLayerId: string | null;
   exportTransparent: boolean;
   exportBackgroundColor: string;
+  exportFormat: ExportFormat;
+  exportScope: ExportScope;
+  exportScaleMode: ExportScaleMode;
+  exportCustomScale: number;
+  exportMaxWebtoonHeight: number;
+  exportIncludeBleed: boolean;
+  exportCropMarks: boolean;
+  canvasRotation: number;
+  showNavigator: boolean;
+  rasterRuler: RasterRulerAxis | null;
 }
 
 export interface SelectionGuide {

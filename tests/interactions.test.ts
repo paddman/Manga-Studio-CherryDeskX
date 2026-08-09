@@ -1,11 +1,16 @@
 import { describe, expect, it } from "vitest";
 import {
   buildPixelSelection,
+  buildContiguousPixelSelection,
   clientToPagePoint,
+  clientToRotatedPagePoint,
   isEraserToolId,
   isUsablePixelSelection,
+  mirrorPointAcrossRuler,
+  projectPointToRuler,
   rasterStrokeKindForToolId,
   selectionModeForToolId,
+  rotatedViewportSize,
 } from "../src/editor/interactions";
 import { rasterDimensionError } from "../src/editor/raster";
 
@@ -22,6 +27,18 @@ describe("editor interactions", () => {
       { left: 0, top: 0, width: 400, height: 500 },
       { width: 800, height: 1000 },
     )).toEqual({ x: 0, y: 1000, pressure: 1 });
+  });
+
+  it("inverts a rotated canvas transform for drawing and selection coordinates", () => {
+    const bounds = rotatedViewportSize(800, 1000, 0.5, 90);
+    expect(bounds.width).toBeCloseTo(500);
+    expect(bounds.height).toBeCloseTo(400);
+    expect(clientToRotatedPagePoint(
+      { clientX: 250, clientY: 250, pressure: 0.7 },
+      { left: 0, top: 0, width: 500, height: 400 },
+      { width: 800, height: 1000 },
+      90,
+    )).toMatchObject({ x: 500, y: 500, pressure: 0.7 });
   });
 
   it("builds normalized rectangular and freehand pixel selections", () => {
@@ -41,19 +58,49 @@ describe("editor interactions", () => {
     expect(lasso?.points).toHaveLength(3);
   });
 
+  it("projects straight-ruler strokes and mirrors symmetry-ruler strokes", () => {
+    const horizontal = { kind: "straight" as const, start: { x: 0, y: 20, pressure: 1 }, end: { x: 100, y: 20, pressure: 1 } };
+    expect(projectPointToRuler({ x: 35, y: 52, pressure: 0.6 }, horizontal)).toEqual({ x: 35, y: 20, pressure: 0.6 });
+    const vertical = { kind: "symmetry" as const, start: { x: 50, y: 0, pressure: 1 }, end: { x: 50, y: 100, pressure: 1 } };
+    expect(mirrorPointAcrossRuler({ x: 30, y: 40, pressure: 0.8 }, vertical)).toEqual({ x: 70, y: 40, pressure: 0.8 });
+  });
+
+  it("builds exact contiguous pixel spans for Magic Wand and Quick Selection", () => {
+    const width = 5;
+    const height = 3;
+    const pixels = new Uint8ClampedArray(width * height * 4);
+    for (let row = 0; row < height; row += 1) {
+      const offset = (row * width + 2) * 4;
+      pixels[offset] = 255;
+      pixels[offset + 3] = 255;
+    }
+    const selection = buildContiguousPixelSelection(pixels, width, height, 0, 1, 0);
+    expect(selection).toMatchObject({ mode: "pixels", x: 0, y: 0, width: 2, height: 3 });
+    expect(selection?.spans).toEqual([
+      { x: 0, y: 0, width: 2 },
+      { x: 0, y: 1, width: 2 },
+      { x: 0, y: 2, width: 2 },
+    ]);
+    expect(isUsablePixelSelection(selection)).toBe(true);
+  });
+
   it("maps selection, shape, fill, and eraser tools to real engine primitives", () => {
     expect(selectionModeForToolId("elliptical-marquee")).toBe("ellipse");
     expect(selectionModeForToolId("selection-pen")).toBe("lasso");
     expect(selectionModeForToolId("magic-wand")).toBeNull();
     expect(rasterStrokeKindForToolId("paint-bucket")).toBe("bucket");
+    expect(rasterStrokeKindForToolId("content-aware-fill")).toBe("content-fill");
     expect(rasterStrokeKindForToolId("contiguous-fill")).toBe("bucket");
     expect(rasterStrokeKindForToolId("magic-eraser")).toBe("erase-fill");
     expect(rasterStrokeKindForToolId("gradient")).toBe("gradient");
     expect(rasterStrokeKindForToolId("rounded-rectangle")).toBe("rectangle");
+    expect(rasterStrokeKindForToolId("screentone")).toBe("fill");
+    expect(rasterStrokeKindForToolId("gradient-tone")).toBe("fill");
     expect(rasterStrokeKindForToolId("g-pen")).toBe("stroke");
     expect(isEraserToolId("background-eraser")).toBe(true);
     expect(isEraserToolId("eraser")).toBe(true);
     expect(isEraserToolId("brush")).toBe(false);
+    expect(isEraserToolId("tone-scraping")).toBe(true);
   });
 
   it("rejects unsafe full-resolution raster dimensions with a clear reason", () => {

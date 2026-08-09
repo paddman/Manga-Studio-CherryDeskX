@@ -19,7 +19,7 @@ function testProject(): MangaProject {
     rasterLayers: [],
     layerOrder: [],
   };
-  return { id: "project", name: "Test", schemaVersion: 3, readingDirection: "ltr", pagePreset: "custom", dpi: 300, colorMode: "rgb", bleed: 0, trim: 0, safeArea: 30, gutter: 16, activePageId: page.id, activeChapterId: "chapter", activeVolumeId: "volume", volumes: [{ id: "volume", name: "เล่ม 1", chapterIds: ["chapter"], order: 0 }], chapters: [{ id: "chapter", volumeId: "volume", name: "บทที่ 1", pageIds: [page.id], order: 0 }], pages: [page], assets: [], createdAt: "2024-01-01T00:00:00.000Z", updatedAt: "2024-01-01T00:00:00.000Z" };
+  return { id: "project", name: "Test", schemaVersion: 6, readingDirection: "ltr", pagePreset: "custom", dpi: 300, colorMode: "rgb", bleed: 0, trim: 0, safeArea: 30, gutter: 16, activePageId: page.id, activeChapterId: "chapter", activeVolumeId: "volume", volumes: [{ id: "volume", name: "เล่ม 1", chapterIds: ["chapter"], order: 0 }], chapters: [{ id: "chapter", volumeId: "volume", name: "บทที่ 1", pageIds: [page.id], order: 0 }], pages: [page], assets: [], textStyles: [], createdAt: "2024-01-01T00:00:00.000Z", updatedAt: "2024-01-01T00:00:00.000Z" };
 }
 
 describe("editor actions", () => {

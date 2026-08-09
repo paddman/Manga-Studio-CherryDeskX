@@ -19,6 +19,7 @@ import type {
 import { activePage, runtime, selectedElement, selectedElements, setSelection, transact } from "./state";
 import { movePageLayer, normalizePageLayerOrder, removeFromPageLayerOrder } from "./layers";
 import { getTemplatePanels } from "./templates";
+import { resizePageContent } from "./document";
 
 export function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
@@ -115,6 +116,7 @@ async function readAsset(file: File): Promise<LoadedAsset> {
   const height = Math.max(120, dimensions.height * ratio);
   const asset: MangaAsset = {
     id: uid("asset"),
+    kind: "image",
     name: file.name,
     src,
     mimeType: blob.type,
@@ -157,7 +159,7 @@ export async function handleUploads(files: FileList | null, replaceSelected = fa
 
 export async function addAssetToPage(assetId: string): Promise<boolean> {
   const asset = runtime.project.assets.find((item) => item.id === assetId);
-  if (!asset) return false;
+  if (!asset || asset.kind !== "image") return false;
   const dimensions = await imageDimensions(asset.src);
   const scale = Math.min(430 / dimensions.width, 430 / dimensions.height, 1);
   transact(() => {
@@ -367,6 +369,8 @@ export function setSelectedProperty(prop: string, rawValue: string | boolean): v
       "width",
       "height",
       "rotation",
+      "skewX",
+      "skewY",
       "borderWidth",
       "borderRadius",
       "grayscale",
@@ -383,6 +387,8 @@ export function setSelectedProperty(prop: string, rawValue: string | boolean): v
     record[prop] = numericProps.has(prop) ? Number(rawValue) : rawValue;
     element.width = Math.max(10, element.width);
     element.height = Math.max(10, element.height);
+    element.skewX = clamp(element.skewX, -75, 75);
+    element.skewY = clamp(element.skewY, -75, 75);
   });
 }
 
@@ -390,13 +396,9 @@ export function setPageProperty(prop: string, rawValue: string): void {
   transact(() => {
     const page = activePage();
     if (prop === "page-name") page.name = rawValue;
-    if (prop === "page-width") page.width = clamp(Number(rawValue), 320, 3000);
-    if (prop === "page-height") page.height = clamp(Number(rawValue), 320, 5000);
+    if (prop === "page-width") resizePageContent(page, clamp(Number(rawValue), 320, 5000), page.height);
+    if (prop === "page-height") resizePageContent(page, page.width, clamp(Number(rawValue), 320, 8000));
     if (prop === "page-background") page.background = rawValue;
-    page.rasterLayers.forEach((layer) => {
-      layer.width = page.width;
-      layer.height = page.height;
-    });
   });
 }
 
@@ -605,10 +607,15 @@ export function removeOrphanAssets(): number {
   for (const page of runtime.project.pages) {
     for (const element of page.elements) if (element.kind === "image" && element.assetId) used.add(element.assetId);
   }
-  const orphaned = runtime.project.assets.filter((asset) => !used.has(asset.id));
+  const usedFontFamilies = new Set(runtime.project.textStyles.map((style) => style.fontFamily));
+  for (const page of runtime.project.pages) {
+    for (const element of page.elements) if (element.kind === "text" || element.kind === "bubble") usedFontFamilies.add(element.fontFamily);
+  }
+  for (const asset of runtime.project.assets) if (asset.kind === "font" && asset.fontFamily && usedFontFamilies.has(asset.fontFamily)) used.add(asset.id);
+  const orphaned = runtime.project.assets.filter((asset) => asset.kind === "image" && !used.has(asset.id));
   if (!orphaned.length) return 0;
   transact(() => {
-    runtime.project.assets = runtime.project.assets.filter((asset) => used.has(asset.id));
+    runtime.project.assets = runtime.project.assets.filter((asset) => asset.kind === "font" || used.has(asset.id));
     for (const asset of orphaned) {
       const source = runtime.assetSources.get(asset.id);
       if (source?.startsWith("blob:")) URL.revokeObjectURL(source);

@@ -1,19 +1,17 @@
 import "./styles.css";
-import { downloadBlobFile, exportProject, type ExportFormat } from "./export";
+import { downloadBlobFile, exportScaleForMode, pagesForScope } from "./export";
+import { localExportJobRunner } from "./export/runner";
 import { exportProjectBundle, importProjectBundle } from "./persistence/archive";
 import { hydrateAssetSources } from "./persistence/serialization";
 import { renderRasterLayer } from "./editor/raster";
 import { addRasterLayer, applyPixelSelectionAsLayerMask, clearPixelSelection, clearRasterLayer, ensureRasterLayer, invertRasterLayerMask, persistRasterCanvas, recordRasterStroke, removeRasterLayerMask, selectRasterLayer, splitLastStrokeToLayer } from "./editor/raster-actions";
-import { buildPixelSelection, clientToPagePoint, isEraserToolId, isUsablePixelSelection, rasterStrokeKindForToolId, selectionModeForToolId } from "./editor/interactions";
-import { canUseTool, getToolDefinition, isRasterTool, resolveToolShortcut, toolId } from "./editor/tools";
+import { buildContiguousPixelSelection, buildPixelSelection, clientToPagePoint, clientToRotatedPagePoint, isEraserToolId, isUsablePixelSelection, projectPointToRuler, rasterStrokeKindForToolId, selectionModeForToolId } from "./editor/interactions";
+import { canUseTool, getToolDefinition, isRasterTool, toolId } from "./editor/tools";
 import {
   addAssetToPage,
   addBubble,
-  addPage,
   addPanel,
   addTextElement,
-  addChapter,
-  addVolume,
   applyPanelTemplate,
   alignSelected,
   clamp,
@@ -25,21 +23,17 @@ import {
   deleteSelected,
   detachSelectedImage,
   distributeSelected,
-  duplicatePage,
   duplicateSelected,
   flipSelected,
-  getCropRect,
   groupSelected,
   handleUploads,
   moveLayer,
-  moveActivePage,
   pasteElements,
   removeOrphanAssets,
   resetImageEdits,
   setPageProperty,
   setProjectProperty,
   setCropValue,
-  setCropRect,
   setHierarchyName,
   setSelectedProperty,
   smartLayout,
@@ -47,8 +41,22 @@ import {
   ungroupSelected,
 } from "./editor/actions";
 import {
+  addProjectChapter,
+  addProjectPage,
+  addProjectVolume,
+  activateProjectChapter,
+  activateProjectPage,
+  activateProjectVolume,
+  duplicateProjectChapter,
+  duplicateProjectPage,
+  duplicateProjectVolume,
+  moveProjectPage,
+  reorderProjectChapters,
+  reorderProjectPages,
+  reorderProjectVolumes,
+} from "./editor/hierarchy";
+import {
   activePage,
-  checkpoint,
   initializePersistence,
   persistProject,
   redoProject,
@@ -61,12 +69,21 @@ import {
   undoProject,
 } from "./editor/state";
 import { renderApp } from "./editor/view";
-import type { BubbleVariant, ImageElement, LeftTab, MangaElement, PixelSelectionShape, RasterPoint, RasterStroke, TextAlign, Tool } from "./types";
+import { applyPagePreset, setDocumentMetadata, type DocumentMetadataProperty } from "./editor/document";
+import { splitPanelAtPoint } from "./editor/panels";
+import { addBubbleTail, applyEmbeddedFont, applyTextStylePreset, removeBubbleTail, removeTextStylePreset, saveSelectedTextStyle } from "./editor/text-actions";
+import { handleFontUploads, registerProjectFonts, removeEmbeddedFont } from "./editor/font-assets";
+import { handleEditorKeydown } from "./editor/keyboard";
+import { createGestureController, pagePosition } from "./app/gestures";
+import type { BubbleVariant, ExportFormat, ExportScaleMode, ExportScope, LeftTab, PagePreset, PixelSelectionShape, RasterPoint, RasterStroke, TextAlign, Tool } from "./types";
+import { contentAwareFillPixels, contentAwareSelectionArea, MAX_LOCAL_CONTENT_AWARE_PIXELS } from "./editor/content-aware";
 
 const root = document.querySelector<HTMLDivElement>("#app");
 if (!root) throw new Error("Missing #app root");
 const appRoot: HTMLDivElement = root;
 let toastTimer: number | undefined;
+let hierarchyDrag: { kind: "volume" | "chapter" | "page"; id: string } | null = null;
+let exportAbortController: AbortController | null = null;
 
 function render(): void {
   appRoot.innerHTML = renderApp();
@@ -77,6 +94,17 @@ function render(): void {
     const preview = runtime.preferences.activeRasterLayerId === layer.id ? runtime.rasterPreview : null;
     renderRasterLayer(canvas, page, layer, preview);
   });
+  const selectionCanvas = document.querySelector<HTMLCanvasElement>("[data-pixel-selection-canvas]");
+  const selection = runtime.pixelSelection;
+  const selectionContext = selectionCanvas?.getContext("2d");
+  if (selectionCanvas && selectionContext && selection?.mode === "pixels") {
+    selectionContext.clearRect(0, 0, selectionCanvas.width, selectionCanvas.height);
+    selectionContext.fillStyle = "rgba(99,230,255,.22)";
+    for (const span of selection.spans ?? []) selectionContext.fillRect(span.x, span.y, span.width, 1);
+    selectionContext.strokeStyle = "#63e6ff";
+    selectionContext.setLineDash([5, 4]);
+    selectionContext.strokeRect(selection.x + 0.5, selection.y + 0.5, Math.max(1, selection.width - 1), Math.max(1, selection.height - 1));
+  }
 }
 
 function activeRasterCanvas(): HTMLCanvasElement | null {
@@ -112,21 +140,6 @@ function updateSelectionDom(id: string): HTMLElement | null {
   return node;
 }
 
-interface DragItem {
-  element: MangaElement;
-  node: HTMLElement;
-  startX: number;
-  startY: number;
-  startWidth: number;
-  startHeight: number;
-}
-
-interface DragContext {
-  items: DragItem[];
-  startClientX: number;
-  startClientY: number;
-}
-
 function capturePointer(event: PointerEvent): () => void {
   const target = event.target instanceof Element ? event.target : null;
   if (!target) return () => undefined;
@@ -144,315 +157,19 @@ function capturePointer(event: PointerEvent): () => void {
   };
 }
 
-function pagePosition(element: MangaElement): { x: number; y: number } {
-  if (!element.parentId) return { x: element.x, y: element.y };
-  const parent = activePage().elements.find((candidate) => candidate.id === element.parentId);
-  return parent ? { x: parent.x + element.x, y: parent.y + element.y } : { x: element.x, y: element.y };
-}
-
-function moveByPageDelta(element: MangaElement, dx: number, dy: number): void {
-  if (element.parentId) {
-    element.x += dx;
-    element.y += dy;
-  } else {
-    element.x += dx;
-    element.y += dy;
-  }
-}
-
-function snapDraggedItems(items: DragItem[]): void {
-  const page = activePage();
-  const selectedIds = new Set(items.map((item) => item.element.id));
-  const boxes = items.map(({ element }) => {
-    const position = pagePosition(element);
-    return { element, ...position, right: position.x + element.width, bottom: position.y + element.height };
-  });
-  const minX = Math.min(...boxes.map((box) => box.x));
-  const maxX = Math.max(...boxes.map((box) => box.right));
-  const minY = Math.min(...boxes.map((box) => box.y));
-  const maxY = Math.max(...boxes.map((box) => box.bottom));
-  const centerX = (minX + maxX) / 2;
-  const centerY = (minY + maxY) / 2;
-  const xCandidates = [0, page.width / 2, page.width, ...page.elements.filter((element) => !selectedIds.has(element.id)).flatMap((element) => {
-    const position = pagePosition(element);
-    return [position.x, position.x + element.width / 2, position.x + element.width];
-  })];
-  const yCandidates = [0, page.height / 2, page.height, ...page.elements.filter((element) => !selectedIds.has(element.id)).flatMap((element) => {
-    const position = pagePosition(element);
-    return [position.y, position.y + element.height / 2, position.y + element.height];
-  })];
-  const xTargets = [{ value: minX, offset: 0 }, { value: centerX, offset: 0 }, { value: maxX, offset: 0 }];
-  const yTargets = [{ value: minY, offset: 0 }, { value: centerY, offset: 0 }, { value: maxY, offset: 0 }];
-  const nearest = (targets: { value: number; offset: number }[], candidates: number): { correction: number; position: number } | null => {
-    let best: { correction: number; position: number } | null = null;
-    for (const target of targets) {
-      const correction = candidates - target.value;
-      if (Math.abs(correction) > 8 || (best && Math.abs(correction) >= Math.abs(best.correction))) continue;
-      best = { correction, position: candidates };
-    }
-    return best;
-  };
-  const xSnap = xCandidates.map((candidate) => nearest(xTargets, candidate)).filter((value): value is { correction: number; position: number } => value !== null).sort((a, b) => Math.abs(a.correction) - Math.abs(b.correction))[0];
-  const ySnap = yCandidates.map((candidate) => nearest(yTargets, candidate)).filter((value): value is { correction: number; position: number } => value !== null).sort((a, b) => Math.abs(a.correction) - Math.abs(b.correction))[0];
-  runtime.selectionGuides = [];
-  if (xSnap) {
-    boxes.forEach(({ element }) => moveByPageDelta(element, xSnap.correction, 0));
-    runtime.selectionGuides.push({ axis: "x", position: xSnap.position, label: `${Math.round(xSnap.position)} px` });
-  }
-  if (ySnap) {
-    boxes.forEach(({ element }) => moveByPageDelta(element, 0, ySnap.correction));
-    runtime.selectionGuides.push({ axis: "y", position: ySnap.position, label: `${Math.round(ySnap.position)} px` });
-  }
-}
-
-function beginMove(event: PointerEvent, element: MangaElement, node: HTMLElement): void {
-  if (element.locked || runtime.preferences.tool !== "select") return;
-  if (runtime.preferences.cropElementId === element.id && element.kind === "image") {
-    beginCropMove(event, element, node);
-    return;
-  }
-  const elements = selectedElements().filter((candidate) => !candidate.locked);
-  const releasePointer = capturePointer(event);
-  checkpoint();
-  const context: DragContext = {
-    items: elements.map((candidate) => ({
-      element: candidate,
-      node: document.querySelector<HTMLElement>(`[data-element-id="${CSS.escape(candidate.id)}"]`) ?? node,
-      startX: candidate.x,
-      startY: candidate.y,
-      startWidth: candidate.width,
-      startHeight: candidate.height,
-    })),
-    startClientX: event.clientX,
-    startClientY: event.clientY,
-  };
-
-  const move = (moveEvent: PointerEvent): void => {
-    const dx = (moveEvent.clientX - context.startClientX) / runtime.preferences.zoom;
-    const dy = (moveEvent.clientY - context.startClientY) / runtime.preferences.zoom;
-    const page = activePage();
-    context.items.forEach((item) => {
-      const parent = item.element.parentId ? page.elements.find((candidate) => candidate.id === item.element.parentId) : null;
-      const minX = parent ? 0 : -item.element.width + 24;
-      const maxX = parent && parent.kind === "panel" ? parent.width - 24 : page.width - 24;
-      const minY = parent ? 0 : -item.element.height + 24;
-      const maxY = parent && parent.kind === "panel" ? parent.height - 24 : page.height - 24;
-      item.element.x = clamp(item.startX + dx, minX, maxX);
-      item.element.y = clamp(item.startY + dy, minY, maxY);
-      item.node.style.left = `${item.element.x}px`;
-      item.node.style.top = `${item.element.y}px`;
-    });
-    snapDraggedItems(context.items);
-    context.items.forEach((item) => {
-      item.node.style.left = `${item.element.x}px`;
-      item.node.style.top = `${item.element.y}px`;
-    });
-  };
-
-  const end = (): void => {
-    window.removeEventListener("pointermove", move);
-    releasePointer();
-    for (const item of context.items) {
-      if (item.element.kind !== "image" || item.element.parentId) continue;
-      const position = pagePosition(item.element);
-      const centerX = position.x + item.element.width / 2;
-      const centerY = position.y + item.element.height / 2;
-      const panel = activePage().elements.find((candidate) => candidate.kind === "panel" && centerX >= candidate.x && centerX <= candidate.x + candidate.width && centerY >= candidate.y && centerY <= candidate.y + candidate.height);
-      if (panel?.kind === "panel") {
-        item.element.parentId = panel.id;
-        item.element.x = position.x - panel.x;
-        item.element.y = position.y - panel.y;
-        panel.clipChildren = true;
-      }
-    }
-    runtime.selectionGuides = [];
-    persistProject();
-    rerender();
-  };
-  window.addEventListener("pointermove", move);
-  window.addEventListener("pointerup", end, { once: true });
-}
-
-function beginCropMove(event: PointerEvent, element: ImageElement, node: HTMLElement): void {
-  const releasePointer = capturePointer(event);
-  checkpoint();
-  const start = getCropRect(element);
-  const nodeRect = node.getBoundingClientRect();
-  const move = (moveEvent: PointerEvent): void => {
-    const dx = (moveEvent.clientX - event.clientX) / Math.max(1, nodeRect.width);
-    const dy = (moveEvent.clientY - event.clientY) / Math.max(1, nodeRect.height);
-    setCropRect(element, { ...start, left: start.left + dx, top: start.top + dy });
-  };
-  const end = (): void => {
-    window.removeEventListener("pointermove", move);
-    releasePointer();
-    persistProject();
-    rerender("ปรับ Crop แล้ว");
-  };
-  window.addEventListener("pointermove", move);
-  window.addEventListener("pointerup", end, { once: true });
-}
-
-function beginCropResize(event: PointerEvent, element: ImageElement, node: HTMLElement, handle: string): void {
-  const releasePointer = capturePointer(event);
-  checkpoint();
-  const start = getCropRect(element);
-  const nodeRect = node.getBoundingClientRect();
-  const startRight = start.left + start.width;
-  const startBottom = start.top + start.height;
-  const move = (moveEvent: PointerEvent): void => {
-    const dx = (moveEvent.clientX - event.clientX) / Math.max(1, nodeRect.width);
-    const dy = (moveEvent.clientY - event.clientY) / Math.max(1, nodeRect.height);
-    let left = start.left;
-    let top = start.top;
-    let right = startRight;
-    let bottom = startBottom;
-    if (handle.includes("w")) left = clamp(start.left + dx, 0, startRight - 0.05);
-    if (handle.includes("e")) right = clamp(startRight + dx, start.left + 0.05, 1);
-    if (handle.includes("n")) top = clamp(start.top + dy, 0, startBottom - 0.05);
-    if (handle.includes("s")) bottom = clamp(startBottom + dy, start.top + 0.05, 1);
-    setCropRect(element, { left, top, width: right - left, height: bottom - top });
-  };
-  const end = (): void => {
-    window.removeEventListener("pointermove", move);
-    releasePointer();
-    persistProject();
-    rerender("เลือกพื้นที่ Crop แล้ว");
-  };
-  window.addEventListener("pointermove", move);
-  window.addEventListener("pointerup", end, { once: true });
-}
-
-function beginResize(event: PointerEvent, element: MangaElement, node: HTMLElement, handle: string): void {
-  if (element.locked) return;
-  const releasePointer = capturePointer(event);
-  checkpoint();
-  const context = {
-    element,
-    node,
-    startClientX: event.clientX,
-    startClientY: event.clientY,
-    startX: element.x,
-    startY: element.y,
-    startWidth: element.width,
-    startHeight: element.height,
-  };
-  const ratio = context.startWidth / context.startHeight;
-
-  const move = (moveEvent: PointerEvent): void => {
-    const dx = (moveEvent.clientX - context.startClientX) / runtime.preferences.zoom;
-    const dy = (moveEvent.clientY - context.startClientY) / runtime.preferences.zoom;
-    let x = context.startX;
-    let y = context.startY;
-    let width = context.startWidth;
-    let height = context.startHeight;
-
-    if (handle.includes("e")) width = context.startWidth + dx;
-    if (handle.includes("s")) height = context.startHeight + dy;
-    if (handle.includes("w")) {
-      width = context.startWidth - dx;
-      x = context.startX + dx;
-    }
-    if (handle.includes("n")) {
-      height = context.startHeight - dy;
-      y = context.startY + dy;
-    }
-
-    if ((element.lockAspect || moveEvent.shiftKey) && handle.length === 2) {
-      if (Math.abs(dx) > Math.abs(dy)) height = width / ratio;
-      else width = height * ratio;
-      if (handle.includes("w")) x = context.startX + context.startWidth - width;
-      if (handle.includes("n")) y = context.startY + context.startHeight - height;
-    }
-
-    if (width < 20) {
-      if (handle.includes("w")) x -= 20 - width;
-      width = 20;
-    }
-    if (height < 20) {
-      if (handle.includes("n")) y -= 20 - height;
-      height = 20;
-    }
-
-    Object.assign(element, { x, y, width, height });
-    Object.assign(node.style, {
-      left: `${x}px`,
-      top: `${y}px`,
-      width: `${width}px`,
-      height: `${height}px`,
-    });
-  };
-
-  const end = (): void => {
-    window.removeEventListener("pointermove", move);
-    releasePointer();
-    persistProject();
-    rerender();
-  };
-  window.addEventListener("pointermove", move);
-  window.addEventListener("pointerup", end, { once: true });
-}
-
-function beginRotate(event: PointerEvent, element: MangaElement, node: HTMLElement): void {
-  if (element.locked) return;
-  const releasePointer = capturePointer(event);
-  checkpoint();
-  const rect = node.getBoundingClientRect();
-  const centerX = rect.left + rect.width / 2;
-  const centerY = rect.top + rect.height / 2;
-  const startAngle = Math.atan2(event.clientY - centerY, event.clientX - centerX);
-  const startRotation = element.rotation;
-
-  const move = (moveEvent: PointerEvent): void => {
-    const angle = Math.atan2(moveEvent.clientY - centerY, moveEvent.clientX - centerX);
-    let degrees = startRotation + ((angle - startAngle) * 180) / Math.PI;
-    if (moveEvent.shiftKey) degrees = Math.round(degrees / 15) * 15;
-    element.rotation = degrees;
-    node.style.transform = `rotate(${degrees}deg)`;
-  };
-
-  const end = (): void => {
-    window.removeEventListener("pointermove", move);
-    releasePointer();
-    persistProject();
-    rerender();
-  };
-  window.addEventListener("pointermove", move);
-  window.addEventListener("pointerup", end, { once: true });
-}
-
-function beginPan(event: PointerEvent): void {
-  const viewport = document.querySelector<HTMLElement>("[data-stage-viewport]");
-  if (!viewport) return;
-  const releasePointer = capturePointer(event);
-  const startX = event.clientX;
-  const startY = event.clientY;
-  const scrollLeft = viewport.scrollLeft;
-  const scrollTop = viewport.scrollTop;
-  const move = (moveEvent: PointerEvent): void => {
-    viewport.scrollLeft = scrollLeft - (moveEvent.clientX - startX);
-    viewport.scrollTop = scrollTop - (moveEvent.clientY - startY);
-  };
-  const end = (): void => {
-    window.removeEventListener("pointermove", move);
-    releasePointer();
-  };
-  window.addEventListener("pointermove", move);
-  window.addEventListener("pointerup", end, { once: true });
-}
-
 function beginSelectionRectangle(event: PointerEvent): void {
   const canvas = document.querySelector<HTMLElement>("[data-page-canvas]");
   if (!canvas) return;
   const releasePointer = capturePointer(event);
-  const rect = canvas.getBoundingClientRect();
-  const startX = clamp((event.clientX - rect.left) / runtime.preferences.zoom, 0, activePage().width);
-  const startY = clamp((event.clientY - rect.top) / runtime.preferences.zoom, 0, activePage().height);
+  const startPoint = pagePoint(event);
+  const startX = startPoint.x;
+  const startY = startPoint.y;
   runtime.selectionRectangle = { x: startX, y: startY, width: 0, height: 0 };
   render();
   const update = (moveEvent: PointerEvent): void => {
-    const currentX = clamp((moveEvent.clientX - rect.left) / runtime.preferences.zoom, 0, activePage().width);
-    const currentY = clamp((moveEvent.clientY - rect.top) / runtime.preferences.zoom, 0, activePage().height);
+    const currentPoint = pagePoint(moveEvent);
+    const currentX = currentPoint.x;
+    const currentY = currentPoint.y;
     runtime.selectionRectangle = {
       x: Math.min(startX, currentX),
       y: Math.min(startY, currentY),
@@ -493,8 +210,13 @@ function pagePoint(event: PointerEvent): RasterPoint {
   const canvas = document.querySelector<HTMLElement>("[data-page-canvas]");
   const page = activePage();
   if (!canvas) return { x: 0, y: 0, pressure: event.pressure || 1 };
-  return clientToPagePoint(event, canvas.getBoundingClientRect(), page);
+  const bounds = canvas.getBoundingClientRect();
+  return Math.abs(runtime.preferences.canvasRotation) < 0.001
+    ? clientToPagePoint(event, bounds, page)
+    : clientToRotatedPagePoint(event, bounds, page, runtime.preferences.canvasRotation);
 }
+
+const { beginMove, beginCropMove, beginCropResize, beginResize, beginRotate, beginPan, beginCanvasRotation, moveNavigatorTo } = createGestureController({ pagePoint, render, rerender });
 
 function selectionModeForTool(tool: Tool): PixelSelectionShape["mode"] | null {
   return selectionModeForToolId(tool as string);
@@ -521,10 +243,78 @@ function beginPixelSelection(event: PointerEvent, mode: PixelSelectionShape["mod
   window.addEventListener("pointerup", end, { once: true });
 }
 
+function applyContiguousPixelSelection(event: PointerEvent, tool: Tool): void {
+  const page = activePage();
+  const preferred = activeRasterCanvas();
+  const preferredLayer = page.rasterLayers.find((layer) => layer.id === preferred?.dataset.rasterLayerId);
+  const canvas = preferred && !preferredLayer?.hidden
+    ? preferred
+    : [...document.querySelectorAll<HTMLCanvasElement>("[data-raster-layer-id]")].reverse().find((candidate) => !page.rasterLayers.find((layer) => layer.id === candidate.dataset.rasterLayerId)?.hidden);
+  const context = canvas?.getContext("2d", { willReadFrequently: true });
+  if (!canvas || !context) {
+    showToast("Magic Wand ต้องใช้ Raster layer ที่มองเห็นได้", "default");
+    return;
+  }
+  try {
+    const point = pagePoint(event);
+    const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
+    const selection = buildContiguousPixelSelection(pixels, canvas.width, canvas.height, point.x, point.y, tool === toolId("quick-selection") ? 48 : 24);
+    if (!selection) {
+      showToast("พื้นที่ใหญ่เกิน guardrail หรือไม่พบสีที่เลือก", "danger");
+      return;
+    }
+    runtime.pixelSelection = selection;
+    render();
+    showToast(`เลือกพื้นที่สี ${selection.width}×${selection.height}px แล้ว`, "success");
+  } catch (error) {
+    showToast(error instanceof Error ? error.message : "อ่าน pixels สำหรับ Selection ไม่สำเร็จ", "danger");
+  }
+}
+
+function beginRasterRuler(event: PointerEvent, kind: "straight" | "symmetry"): void {
+  const releasePointer = capturePointer(event);
+  const start = pagePoint(event);
+  runtime.preferences.rasterRuler = { kind, start, end: { ...start } };
+  render();
+  const update = (moveEvent: PointerEvent): void => {
+    const ruler = runtime.preferences.rasterRuler;
+    if (!ruler) return;
+    ruler.end = pagePoint(moveEvent);
+    render();
+  };
+  const end = (): void => {
+    window.removeEventListener("pointermove", update);
+    releasePointer();
+    const ruler = runtime.preferences.rasterRuler;
+    if (!ruler || Math.hypot(ruler.end.x - ruler.start.x, ruler.end.y - ruler.start.y) < 8) {
+      runtime.preferences.rasterRuler = null;
+      render();
+      showToast("ลากแนวไม้บรรทัดให้ยาวอย่างน้อย 8 px", "danger");
+      return;
+    }
+    runtime.preferences.tool = toolId("brush");
+    savePreferences();
+    render();
+    showToast(kind === "symmetry" ? "ตั้งแกนสมมาตรแล้ว • Stroke ถัดไปจะสะท้อนอีกด้าน" : "ตั้งไม้บรรทัดตรงแล้ว • Stroke จะเกาะแนวนี้", "success");
+  };
+  window.addEventListener("pointermove", update);
+  window.addEventListener("pointerup", end, { once: true });
+}
+
 function beginRasterStroke(event: PointerEvent, tool: Tool): void {
-  if (tool === toolId("lasso-fill") && !runtime.pixelSelection) {
+  if (["lasso-fill", "enclose-fill", "close-fill"].includes(tool as string) && !runtime.pixelSelection) {
     showToast("ใช้ Lasso หรือ Marquee เลือกพื้นที่ก่อนเติมสี", "danger");
     return;
+  }
+  if (tool === toolId("content-aware-fill")) {
+    if (!runtime.pixelSelection) {
+      showToast("เลือกพื้นที่ด้วย Lasso, Marquee หรือ Magic Wand ก่อนใช้ Content-Aware Fill", "danger");
+      return;
+    }
+    if (contentAwareSelectionArea(runtime.pixelSelection) > MAX_LOCAL_CONTENT_AWARE_PIXELS) {
+      showToast(`Content-Aware Fill แบบ local รองรับไม่เกิน ${MAX_LOCAL_CONTENT_AWARE_PIXELS.toLocaleString()} pixels ต่อครั้ง`, "danger");
+      return;
+    }
   }
   let layer: ReturnType<typeof ensureRasterLayer>;
   try {
@@ -539,7 +329,13 @@ function beginRasterStroke(event: PointerEvent, tool: Tool): void {
   }
   const releasePointer = capturePointer(event);
   const kind = rasterStrokeKindForToolId(tool as string);
-  const start = pagePoint(event);
+  const ruler = runtime.preferences.rasterRuler;
+  const rulerApplies = kind === "stroke" || kind === "filter";
+  const constrainedPoint = (pointerEvent: PointerEvent): RasterPoint => {
+    const point = pagePoint(pointerEvent);
+    return rulerApplies && ruler?.kind === "straight" ? projectPointToRuler(point, ruler) : point;
+  };
+  const start = constrainedPoint(event);
   const stroke: RasterStroke = {
     id: `stroke_${Date.now()}_${Math.round(Math.random() * 100000)}`,
     kind,
@@ -552,20 +348,36 @@ function beginRasterStroke(event: PointerEvent, tool: Tool): void {
     selection: runtime.pixelSelection ? structuredClone(runtime.pixelSelection) : undefined,
     preserveAlpha: layer.alphaLock,
     tolerance: 24,
+    mirrorAxis: kind === "stroke" && ruler?.kind === "symmetry" ? structuredClone(ruler) : undefined,
   };
   if (!activeRasterCanvas()) render();
-  if (kind === "fill" || kind === "bucket" || kind === "erase-fill") {
+  if (kind === "fill" || kind === "bucket" || kind === "erase-fill" || kind === "content-fill") {
+    if (kind === "content-fill" && stroke.selection) {
+      const canvas = activeRasterCanvas();
+      const context = canvas?.getContext("2d", { willReadFrequently: true });
+      if (!canvas || !context) {
+        releasePointer();
+        showToast("อ่าน Raster layer สำหรับ Content-Aware Fill ไม่สำเร็จ", "danger");
+        return;
+      }
+      const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data.slice();
+      if (!contentAwareFillPixels(pixels, canvas.width, canvas.height, stroke.selection, stroke.opacity, stroke.preserveAlpha)) {
+        releasePointer();
+        showToast("พื้นที่นี้ไม่มีสีขอบบน Raster layer ให้ใช้เติม", "danger");
+        return;
+      }
+    }
     recordRasterStroke(stroke);
     render();
     const canvas = activeRasterCanvas();
     if (canvas) void persistRasterCanvas(canvas);
     releasePointer();
-    showToast("เติมสีบน Raster layer แล้ว", "success");
+    showToast(kind === "content-fill" ? "เติมพื้นที่จากสีขอบแบบ local แล้ว" : "เติมสีบน Raster layer แล้ว", "success");
     return;
   }
   runtime.rasterPreview = stroke;
   const update = (moveEvent: PointerEvent): void => {
-    stroke.points.push(pagePoint(moveEvent));
+    stroke.points.push(constrainedPoint(moveEvent));
     const canvas = activeRasterCanvas();
     const activeLayer = activePage().rasterLayers.find((candidate) => candidate.id === runtime.preferences.activeRasterLayerId);
     if (canvas && activeLayer) renderRasterLayer(canvas, activePage(), activeLayer, runtime.rasterPreview);
@@ -585,6 +397,10 @@ function beginRasterStroke(event: PointerEvent, tool: Tool): void {
 
 function applyCanvasTool(event: PointerEvent, tool: Tool): boolean {
   const id = tool as string;
+  if (id === "straight-ruler" || id === "symmetry-ruler") {
+    beginRasterRuler(event, id === "symmetry-ruler" ? "symmetry" : "straight");
+    return true;
+  }
   if (id === "grid") {
     runtime.preferences.showGrid = !runtime.preferences.showGrid;
     savePreferences();
@@ -633,9 +449,18 @@ function applyCanvasTool(event: PointerEvent, tool: Tool): boolean {
     }
     const point = pagePoint(event);
     transact(() => {
-      element.tailX = clamp(point.x - element.x, 0, element.width);
-      element.tailY = clamp(point.y - element.y, 0, element.height * 1.6);
-      element.tails = [{ id: element.tails[0]?.id ?? `tail_${Date.now()}`, x: element.tailX, y: element.tailY }];
+      const x = clamp(point.x - element.x, 0, element.width);
+      const y = clamp(point.y - element.y, 0, element.height * 1.6);
+      const nearest = event.shiftKey ? null : element.tails.reduce<{ id: string; distance: number } | null>((best, tail) => {
+        const distance = Math.hypot(tail.x - x, tail.y - y);
+        return !best || distance < best.distance ? { id: tail.id, distance } : best;
+      }, null);
+      if (nearest) {
+        const tail = element.tails.find((candidate) => candidate.id === nearest.id);
+        if (tail) { tail.x = x; tail.y = y; }
+      } else element.tails.push({ id: `tail_${Date.now()}_${element.tails.length}`, x, y });
+      element.tailX = element.tails[0]?.x ?? x;
+      element.tailY = element.tails[0]?.y ?? y;
     });
     render();
     return true;
@@ -650,6 +475,14 @@ function applyCanvasTool(event: PointerEvent, tool: Tool): boolean {
     render();
     return true;
   }
+  if (id === "panel-cutter" || id === "divide-frame") {
+    const result = splitPanelAtPoint(pagePoint(event), id === "divide-frame", event.shiftKey);
+    if (result) {
+      render();
+      showToast("ตัด Panel เป็นสองช่องแล้ว", "success");
+    } else showToast("เลือกหรือคลิก Panel ที่ต้องการตัด", "default");
+    return true;
+  }
   if (id === "flip") {
     flipSelected("horizontal");
     render();
@@ -659,6 +492,16 @@ function applyCanvasTool(event: PointerEvent, tool: Tool): boolean {
     const elements = selectedElements();
     if (elements.length) {
       transact(() => elements.forEach((element) => { element.rotation += 15; }));
+      render();
+    }
+    return true;
+  }
+  if (id === "skew") {
+    const elements = selectedElements();
+    if (elements.length) {
+      transact(() => elements.forEach((element) => {
+        element.skewX = clamp(element.skewX + (event.shiftKey ? -5 : 5), -75, 75);
+      }));
       render();
     }
     return true;
@@ -678,26 +521,47 @@ function applyCanvasTool(event: PointerEvent, tool: Tool): boolean {
 }
 
 async function exportCurrentPage(): Promise<void> {
-  const button = document.querySelector<HTMLButtonElement>("[data-action='export']");
-  if (button) {
-    button.disabled = true;
-    button.textContent = "กำลังส่งออก…";
-  }
+  if (exportAbortController) return;
+  const format = runtime.preferences.exportFormat;
+  const scope = runtime.preferences.exportScope;
+  const pages = pagesForScope(runtime.project, scope);
+  exportAbortController = new AbortController();
+  runtime.exportTask = { status: "running", completed: 0, total: pages.length, label: `กำลังสร้าง ${format.toUpperCase()}` };
+  render();
+  let outcome: { message: string; tone: "default" | "success" | "danger" } = { message: "ส่งออกไม่สำเร็จ", tone: "danger" };
   try {
-    const select = document.querySelector<HTMLSelectElement>("[data-export-format]");
-    const format = (select?.value ?? "png") as ExportFormat;
-    const scope = format === "zip" ? "project" : format === "pdf" || format === "cbz" || format === "webtoon" ? "chapter" : "page";
     const backgroundColor = format === "png" && runtime.preferences.exportTransparent
       ? null
       : format === "jpg" || format === "pdf" || format === "cbz"
         ? runtime.preferences.exportBackgroundColor
         : undefined;
-    await exportProject(runtime.project, runtime.project.name, { format, scope, scale: 2, backgroundColor });
-    showToast(`ส่งออก ${format.toUpperCase()} แล้ว`, "success");
+    const scale = exportScaleForMode(runtime.preferences.exportScaleMode, runtime.preferences.exportCustomScale, runtime.project.dpi);
+    await localExportJobRunner.run(runtime.project, runtime.project.name, {
+      format,
+      scope,
+      scale,
+      backgroundColor,
+      maxWebtoonHeight: runtime.preferences.exportMaxWebtoonHeight,
+      includeBleed: runtime.preferences.exportIncludeBleed,
+      cropMarks: runtime.preferences.exportCropMarks,
+      signal: exportAbortController.signal,
+      onProgress: (completed, total) => {
+        runtime.exportTask = { ...runtime.exportTask, completed, total };
+        render();
+      },
+    });
+    outcome = { message: runtime.project.colorMode === "cmyk"
+      ? `ส่งออก ${format.toUpperCase()} แบบ RGB แล้ว • CMYK ยังเป็น metadata`
+      : `ส่งออก ${format.toUpperCase()} แล้ว`, tone: "success" };
   } catch (error) {
-    showToast(error instanceof Error ? error.message : "ส่งออกไม่สำเร็จ", "danger");
+    outcome = error instanceof DOMException && error.name === "AbortError"
+      ? { message: "ยกเลิกการส่งออกแล้ว", tone: "default" }
+      : { message: error instanceof Error ? error.message : "ส่งออกไม่สำเร็จ", tone: "danger" };
   } finally {
+    exportAbortController = null;
+    runtime.exportTask = { status: "idle", completed: 0, total: 0, label: "" };
     render();
+    showToast(outcome.message, outcome.tone);
   }
 }
 
@@ -727,6 +591,7 @@ function importProjectFile(): void {
       }));
       await Promise.all([...bundle.rasters.entries()].map(async ([bitmapKey, blob]) => runtime.persistence.rasters.put(bitmapKey, blob)));
       hydrateAssetSources(runtime.project, runtime.assetSources);
+      await registerProjectFonts(runtime.project);
       setSelection([]);
       persistProject();
       render();
@@ -773,7 +638,20 @@ async function handleAction(action: string): Promise<void> {
     render();
     return;
   }
+  if (action === "reset-canvas-view") {
+    runtime.preferences.zoom = 0.62;
+    runtime.preferences.canvasRotation = 0;
+    savePreferences();
+    render();
+    return;
+  }
   if (action === "export") return exportCurrentPage();
+  if (action === "cancel-export") {
+    exportAbortController?.abort();
+    runtime.exportTask = { ...runtime.exportTask, status: "cancelled" };
+    showToast("กำลังยกเลิกการส่งออก…", "default");
+    return;
+  }
   if (action === "export-project") return exportProjectFile();
   if (action === "import-project") {
     importProjectFile();
@@ -781,6 +659,17 @@ async function handleAction(action: string): Promise<void> {
   }
   if (action === "open-upload") {
     document.querySelector<HTMLInputElement>("[data-upload-input]")?.click();
+    return;
+  }
+  if (action === "open-font-upload") {
+    document.querySelector<HTMLInputElement>("[data-font-upload-input]")?.click();
+    return;
+  }
+  if (action === "clear-raster-ruler") {
+    runtime.preferences.rasterRuler = null;
+    savePreferences();
+    render();
+    showToast("ปิดไม้บรรทัดแล้ว", "default");
     return;
   }
   if (action === "add-raster-layer") {
@@ -819,15 +708,27 @@ async function handleAction(action: string): Promise<void> {
   if (action === "add-panel") return runMutation(addPanel, "เพิ่มช่องใหม่แล้ว");
   if (action === "add-text") return runMutation(() => addTextElement(false), "เพิ่มข้อความแล้ว");
   if (action === "add-title") return runMutation(() => addTextElement(true), "เพิ่มหัวเรื่องแล้ว");
+  if (action === "save-text-style") {
+    const styleId = saveSelectedTextStyle();
+    if (styleId) rerender("บันทึก Text style แล้ว");
+    else showToast("เลือกข้อความหรือบอลลูนก่อนบันทึกสไตล์", "default");
+    return;
+  }
+  if (action === "add-bubble-tail") {
+    const tailId = addBubbleTail();
+    if (tailId) rerender("เพิ่มหางบอลลูนแล้ว");
+    else showToast("เลือกบอลลูนก่อนเพิ่มหาง", "default");
+    return;
+  }
   if (action === "duplicate-element") return runMutation(duplicateSelected, "ทำสำเนาแล้ว");
   if (action === "delete-element") return runMutation(deleteSelected, "ลบองค์ประกอบแล้ว");
   if (action === "toggle-lock") return runMutation(toggleSelectedLock, "เปลี่ยนสถานะล็อกแล้ว");
   if (action === "bring-forward") return runMutation(() => moveLayer(1), "เลื่อนเลเยอร์ขึ้นแล้ว");
   if (action === "send-backward") return runMutation(() => moveLayer(-1), "เลื่อนเลเยอร์ลงแล้ว");
-  if (action === "add-page") return runMutation(addPage, "เพิ่มหน้าใหม่แล้ว");
-  if (action === "duplicate-page") return runMutation(duplicatePage, "ทำสำเนาหน้าแล้ว");
+  if (action === "add-page") return runMutation(addProjectPage, "เพิ่มหน้าใหม่แล้ว");
+  if (action === "duplicate-page") return runMutation(duplicateProjectPage, "ทำสำเนาหน้าแล้ว");
   if (action === "delete-page") return runMutation(deletePage, "ลบหน้าแล้ว");
-  if (action === "move-page-back" || action === "move-page-forward") return runMutation(() => moveActivePage(action === "move-page-back" ? -1 : 1), "เรียงหน้าแล้ว");
+  if (action === "move-page-back" || action === "move-page-forward") return runMutation(() => moveProjectPage(action === "move-page-back" ? -1 : 1), "เรียงหน้าแล้ว");
   if (action === "delete-volume") {
     if (window.confirm("ลบเล่มนี้และหน้าทั้งหมดในเล่มหรือไม่? สามารถกดย้อนกลับได้")) return runMutation(deleteActiveVolume, "ลบเล่มแล้ว");
     return;
@@ -837,8 +738,10 @@ async function handleAction(action: string): Promise<void> {
     return;
   }
   if (action === "smart-layout") return runMutation(smartLayout, "Smart Layout จัดหน้าให้แล้ว");
-  if (action === "add-volume") return runMutation(addVolume, "เพิ่มเล่มแล้ว");
-  if (action === "add-chapter") return runMutation(addChapter, "เพิ่มบทแล้ว");
+  if (action === "add-volume") return runMutation(addProjectVolume, "เพิ่มเล่มพร้อมหน้าแรกแล้ว");
+  if (action === "add-chapter") return runMutation(addProjectChapter, "เพิ่มบทพร้อมหน้าแรกแล้ว");
+  if (action === "duplicate-volume") return runMutation(duplicateProjectVolume, "ทำสำเนาเล่มแล้ว");
+  if (action === "duplicate-chapter") return runMutation(duplicateProjectChapter, "ทำสำเนาบทแล้ว");
   if (action === "align-left" || action === "align-center" || action === "align-right" || action === "align-top" || action === "align-middle" || action === "align-bottom") {
     return runMutation(() => alignSelected(action.replace("align-", "") as "left" | "center" | "right" | "top" | "middle" | "bottom"), "จัดแนวแล้ว");
   }
@@ -895,6 +798,37 @@ appRoot.addEventListener("click", (event) => {
     return;
   }
 
+  const textStyleId = target.closest<HTMLElement>("[data-apply-text-style]")?.dataset.applyTextStyle;
+  if (textStyleId) {
+    if (applyTextStylePreset(textStyleId)) rerender("ใช้ Text style แล้ว");
+    return;
+  }
+
+  const fontAssetId = target.closest<HTMLElement>("[data-apply-font]")?.dataset.applyFont;
+  if (fontAssetId) {
+    if (applyEmbeddedFont(fontAssetId)) rerender("ใช้ฟอนต์ที่ฝังแล้ว");
+    else showToast("เลือกข้อความหรือบอลลูนก่อนใช้ฟอนต์", "default");
+    return;
+  }
+
+  const removeFontId = target.closest<HTMLElement>("[data-remove-font]")?.dataset.removeFont;
+  if (removeFontId) {
+    if (removeEmbeddedFont(removeFontId)) rerender("ลบฟอนต์ฝังและใช้ฟอนต์ระบบแทนแล้ว");
+    return;
+  }
+
+  const removeStyleId = target.closest<HTMLElement>("[data-remove-text-style]")?.dataset.removeTextStyle;
+  if (removeStyleId) {
+    if (removeTextStylePreset(removeStyleId)) rerender("ลบ Text style แล้ว");
+    return;
+  }
+
+  const removeTailId = target.closest<HTMLElement>("[data-remove-bubble-tail]")?.dataset.removeBubbleTail;
+  if (removeTailId) {
+    if (removeBubbleTail(removeTailId)) rerender("ลบหางบอลลูนแล้ว");
+    return;
+  }
+
   const tab = target.closest<HTMLElement>("[data-left-tab]")?.dataset.leftTab as LeftTab | undefined;
   if (tab) {
     runtime.preferences.leftTab = tab;
@@ -912,6 +846,13 @@ appRoot.addEventListener("click", (event) => {
     }
     if (tool === toolId("asset")) {
       document.querySelector<HTMLInputElement>("[data-upload-input]")?.click();
+      return;
+    }
+    if (tool === toolId("navigator")) {
+      runtime.preferences.showNavigator = !runtime.preferences.showNavigator;
+      runtime.preferences.tool = toolId("select");
+      savePreferences();
+      render();
       return;
     }
     if (tool === toolId("alpha-lock")) {
@@ -951,13 +892,23 @@ appRoot.addEventListener("click", (event) => {
 
   const pageId = target.closest<HTMLElement>("[data-page-id]")?.dataset.pageId;
   if (pageId) {
-    runtime.project.activePageId = pageId;
-    const page = runtime.project.pages.find((item) => item.id === pageId);
-    if (page) {
-      runtime.project.activeVolumeId = page.volumeId;
-      runtime.project.activeChapterId = page.chapterId;
-    }
-    setSelection([]);
+    activateProjectPage(pageId);
+    persistProject();
+    render();
+    return;
+  }
+
+  const volumeId = target.closest<HTMLElement>("[data-hierarchy-select-volume]")?.dataset.hierarchySelectVolume;
+  if (volumeId) {
+    activateProjectVolume(volumeId);
+    persistProject();
+    render();
+    return;
+  }
+
+  const chapterId = target.closest<HTMLElement>("[data-hierarchy-select-chapter]")?.dataset.hierarchySelectChapter;
+  if (chapterId) {
+    activateProjectChapter(chapterId);
     persistProject();
     render();
     return;
@@ -1020,6 +971,15 @@ appRoot.addEventListener("change", (event) => {
     return;
   }
 
+  if (target.matches("[data-font-upload-input]") && target instanceof HTMLInputElement) {
+    const input = target;
+    void handleFontUploads(input.files)
+      .then((count) => rerender(`ฝังฟอนต์ ${count} ไฟล์แล้ว`))
+      .catch((error: unknown) => showToast(error instanceof Error ? error.message : "ฝังฟอนต์ไม่สำเร็จ", "danger"))
+      .finally(() => { input.value = ""; });
+    return;
+  }
+
   const brushPreference = target.dataset.brushPref;
   if (brushPreference) {
     if (brushPreference === "color") runtime.preferences.brushColor = target.value;
@@ -1051,10 +1011,75 @@ appRoot.addEventListener("change", (event) => {
     return;
   }
 
+  if (target.matches("[data-export-format]")) {
+    const format = target.value as ExportFormat;
+    if (["png", "jpg", "pdf", "cbz", "zip", "webtoon"].includes(format)) runtime.preferences.exportFormat = format;
+    savePreferences();
+    render();
+    return;
+  }
+
+  if (target.matches("[data-export-scope]")) {
+    const scope = target.value as ExportScope;
+    if (["page", "chapter", "volume", "project"].includes(scope)) runtime.preferences.exportScope = scope;
+    savePreferences();
+    render();
+    return;
+  }
+
+  if (target.matches("[data-export-scale-mode]")) {
+    const mode = target.value as ExportScaleMode;
+    if (["1x", "2x", "300dpi", "custom"].includes(mode)) runtime.preferences.exportScaleMode = mode;
+    savePreferences();
+    render();
+    return;
+  }
+
+  if (target.matches("[data-export-custom-scale]")) {
+    runtime.preferences.exportCustomScale = clamp(Number(target.value), 0.25, 8);
+    savePreferences();
+    render();
+    return;
+  }
+
+  if (target.matches("[data-export-max-height]")) {
+    runtime.preferences.exportMaxWebtoonHeight = Math.round(clamp(Number(target.value), 1000, 32000));
+    savePreferences();
+    render();
+    return;
+  }
+
+  if (target.matches("[data-export-include-bleed]")) {
+    runtime.preferences.exportIncludeBleed = (target as HTMLInputElement).checked;
+    savePreferences();
+    render();
+    return;
+  }
+
+  if (target.matches("[data-export-crop-marks]")) {
+    runtime.preferences.exportCropMarks = (target as HTMLInputElement).checked;
+    savePreferences();
+    render();
+    return;
+  }
+
   if (target.matches("[data-export-background]")) {
     runtime.preferences.exportBackgroundColor = target.value;
     savePreferences();
     render();
+    return;
+  }
+
+  if (target.matches("[data-page-preset]")) {
+    if (applyPagePreset(target.value as PagePreset)) rerender("เปลี่ยน Page preset และปรับสัดส่วนเนื้อหาแล้ว");
+    else showToast("Page preset ไม่ถูกต้อง", "danger");
+    return;
+  }
+
+  const documentProperty = target.dataset.documentProp as DocumentMetadataProperty | undefined;
+  if (documentProperty) {
+    if (setDocumentMetadata(documentProperty, target.value)) render();
+    else showToast("ค่าตั้งค่าเอกสารไม่ถูกต้อง", "danger");
     return;
   }
 
@@ -1067,22 +1092,14 @@ appRoot.addEventListener("change", (event) => {
   }
 
   if (target.matches("[data-hierarchy-volume]")) {
-    runtime.project.activeVolumeId = target.value;
-    const chapter = runtime.project.chapters.find((item) => item.volumeId === target.value);
-    if (chapter) runtime.project.activeChapterId = chapter.id;
+    activateProjectVolume(target.value);
     persistProject();
     render();
     return;
   }
 
   if (target.matches("[data-hierarchy-chapter]")) {
-    runtime.project.activeChapterId = target.value;
-    const chapter = runtime.project.chapters.find((item) => item.id === target.value);
-    const pageId = chapter?.pageIds[0];
-    if (chapter && pageId) {
-      runtime.project.activeVolumeId = chapter.volumeId;
-      runtime.project.activePageId = pageId;
-    }
+    activateProjectChapter(target.value);
     persistProject();
     render();
     return;
@@ -1120,9 +1137,58 @@ appRoot.addEventListener("change", (event) => {
   }
 });
 
+appRoot.addEventListener("dragstart", (event) => {
+  if (!(event instanceof DragEvent)) return;
+  const row = (event.target as HTMLElement).closest<HTMLElement>("[data-hierarchy-drag-kind][data-hierarchy-drag-id]");
+  const kind = row?.dataset.hierarchyDragKind;
+  const id = row?.dataset.hierarchyDragId;
+  if (!row || !id || (kind !== "volume" && kind !== "chapter" && kind !== "page")) return;
+  hierarchyDrag = { kind, id };
+  event.dataTransfer?.setData("text/plain", `${kind}:${id}`);
+  if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
+  row.classList.add("is-dragging");
+});
+
+appRoot.addEventListener("dragover", (event) => {
+  if (!(event instanceof DragEvent) || !hierarchyDrag) return;
+  const target = (event.target as HTMLElement).closest<HTMLElement>("[data-hierarchy-drag-kind][data-hierarchy-drag-id]");
+  if (!target || target.dataset.hierarchyDragKind !== hierarchyDrag.kind || target.dataset.hierarchyDragId === hierarchyDrag.id) return;
+  event.preventDefault();
+  if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+  document.querySelectorAll(".is-drop-target").forEach((node) => node.classList.remove("is-drop-target"));
+  target.classList.add("is-drop-target");
+});
+
+appRoot.addEventListener("drop", (event) => {
+  if (!(event instanceof DragEvent) || !hierarchyDrag) return;
+  const target = (event.target as HTMLElement).closest<HTMLElement>("[data-hierarchy-drag-kind][data-hierarchy-drag-id]");
+  const targetId = target?.dataset.hierarchyDragId;
+  if (!targetId || target?.dataset.hierarchyDragKind !== hierarchyDrag.kind) return;
+  event.preventDefault();
+  const moved = hierarchyDrag.kind === "volume"
+    ? reorderProjectVolumes(hierarchyDrag.id, targetId)
+    : hierarchyDrag.kind === "chapter"
+      ? reorderProjectChapters(hierarchyDrag.id, targetId)
+      : reorderProjectPages(hierarchyDrag.id, targetId);
+  hierarchyDrag = null;
+  rerender(moved ? "เรียงโครงสร้างโปรเจกต์แล้ว" : "ย้ายรายการนี้ไม่ได้", moved ? "success" : "default");
+});
+
+appRoot.addEventListener("dragend", () => {
+  hierarchyDrag = null;
+  document.querySelectorAll(".is-dragging, .is-drop-target").forEach((node) => node.classList.remove("is-dragging", "is-drop-target"));
+});
+
 appRoot.addEventListener("pointerdown", (event) => {
   if (!(event instanceof PointerEvent)) return;
   const target = event.target as HTMLElement;
+
+  const navigatorMap = target.closest<HTMLElement>("[data-navigator-map]");
+  if (navigatorMap) {
+    event.preventDefault();
+    moveNavigatorTo(event, navigatorMap);
+    return;
+  }
 
   if (runtime.preferences.tool === "hand" && target.closest("[data-stage-viewport]")) {
     event.preventDefault();
@@ -1131,6 +1197,16 @@ appRoot.addEventListener("pointerdown", (event) => {
   }
 
   const activeTool = runtime.preferences.tool;
+  if ((activeTool === toolId("magic-wand") || activeTool === toolId("quick-selection")) && target.closest("[data-page-canvas]")) {
+    event.preventDefault();
+    applyContiguousPixelSelection(event, activeTool);
+    return;
+  }
+  if (activeTool === toolId("rotate-canvas") && target.closest("[data-page-canvas]")) {
+    event.preventDefault();
+    beginCanvasRotation(event);
+    return;
+  }
   if (target.closest("[data-page-canvas]") && applyCanvasTool(event, activeTool)) {
     event.preventDefault();
     event.stopPropagation();
@@ -1191,7 +1267,7 @@ appRoot.addEventListener("pointerdown", (event) => {
     event.preventDefault();
     event.stopPropagation();
     const node = resizeHandle.closest<HTMLElement>("[data-element-id]");
-    const element = selectedElement();
+    const element = activePage().elements.find((candidate) => candidate.id === node?.dataset.elementId) ?? null;
     if (node && element) beginResize(event, element, node, resizeHandle.dataset.resize ?? "se");
     return;
   }
@@ -1201,7 +1277,7 @@ appRoot.addEventListener("pointerdown", (event) => {
     event.preventDefault();
     event.stopPropagation();
     const node = rotateHandle.closest<HTMLElement>("[data-element-id]");
-    const element = selectedElement();
+    const element = activePage().elements.find((candidate) => candidate.id === node?.dataset.elementId) ?? null;
     if (node && element) beginRotate(event, element, node);
     return;
   }
@@ -1278,86 +1354,32 @@ appRoot.addEventListener("dblclick", (event) => {
 window.addEventListener("keydown", (event) => {
   const active = document.activeElement;
   const typing = active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement || active instanceof HTMLSelectElement;
-  const command = event.ctrlKey || event.metaKey;
-
-  if (command && event.key.toLowerCase() === "z") {
-    event.preventDefault();
-    if (event.shiftKey) redoProject();
-    else undoProject();
-    rerender();
-    return;
-  }
-  if (command && event.key.toLowerCase() === "y") {
-    event.preventDefault();
-    redoProject();
-    rerender();
-    return;
-  }
-  if (command && event.key.toLowerCase() === "s") {
-    event.preventDefault();
-    persistProject();
-    rerender("บันทึกโปรเจกต์แล้ว");
-    return;
-  }
-  if (command && event.key.toLowerCase() === "c") {
-    event.preventDefault();
-    copySelected();
-    return;
-  }
-  if (command && event.key.toLowerCase() === "x") {
-    event.preventDefault();
-    cutSelected();
-    rerender("ตัดแล้ว");
-    return;
-  }
-  if (command && event.key.toLowerCase() === "v") {
-    event.preventDefault();
-    pasteElements();
-    rerender("วางแล้ว");
-    return;
-  }
-  if (command && event.key.toLowerCase() === "g") {
-    event.preventDefault();
-    if (event.shiftKey) ungroupSelected();
-    else groupSelected();
-    rerender(event.shiftKey ? "ยกเลิกกลุ่มแล้ว" : "จัดกลุ่มแล้ว");
-    return;
-  }
-  if (typing) return;
-
-  const shortcutTool = !command && !event.altKey ? resolveToolShortcut(event.key) : null;
-  if (shortcutTool) {
-    runtime.preferences.tool = shortcutTool;
-    savePreferences();
-    render();
-    return;
-  }
-  const selectedRaster = activePage().rasterLayers.some((layer) => layer.id === runtime.selectedId);
-  if ((event.key === "Delete" || event.key === "Backspace") && (selectedElements().length || selectedRaster)) {
-    event.preventDefault();
-    deleteSelected();
-    rerender("ลบองค์ประกอบแล้ว");
-  }
-  if (command && event.key.toLowerCase() === "d" && selectedElements().length) {
-    event.preventDefault();
-    duplicateSelected();
-    rerender("ทำสำเนาแล้ว");
-  }
-
-  const elements = selectedElements();
-  if (elements.length && ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(event.key)) {
-    event.preventDefault();
-    const amount = event.shiftKey ? 10 : 1;
-    transact(() => {
-      elements.forEach((element) => {
-        if (event.key === "ArrowUp") element.y -= amount;
-        if (event.key === "ArrowDown") element.y += amount;
-        if (event.key === "ArrowLeft") element.x -= amount;
-        if (event.key === "ArrowRight") element.x += amount;
+  handleEditorKeydown(event, typing, {
+    undo: () => { undoProject(); rerender(); },
+    redo: () => { redoProject(); rerender(); },
+    save: () => { persistProject(); rerender("บันทึกโปรเจกต์แล้ว"); },
+    copy: copySelected,
+    cut: () => { cutSelected(); rerender("ตัดแล้ว"); },
+    paste: () => { pasteElements(); rerender("วางแล้ว"); },
+    group: () => { groupSelected(); rerender("จัดกลุ่มแล้ว"); },
+    ungroup: () => { ungroupSelected(); rerender("ยกเลิกกลุ่มแล้ว"); },
+    selectTool: (tool) => { runtime.preferences.tool = tool; savePreferences(); render(); },
+    hasSelection: () => selectedElements().length > 0 || activePage().rasterLayers.some((layer) => layer.id === runtime.selectedId),
+    deleteSelection: () => { deleteSelected(); rerender("ลบองค์ประกอบแล้ว"); },
+    duplicateSelection: () => { duplicateSelected(); rerender("ทำสำเนาแล้ว"); },
+    nudgeSelection: (direction, amount) => {
+      const elements = selectedElements();
+      transact(() => {
+        elements.forEach((element) => {
+          if (direction === "up") element.y -= amount;
+          if (direction === "down") element.y += amount;
+          if (direction === "left") element.x -= amount;
+          if (direction === "right") element.x += amount;
+        });
       });
-    });
-    render();
-  }
+      render();
+    },
+  });
 });
 
 window.addEventListener("beforeunload", () => persistProject());

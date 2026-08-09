@@ -10,7 +10,7 @@ A functional browser editor for arranging, decorating, resizing, stretching, rot
 - Upload PNG, JPG, WEBP and SVG artwork.
 - Reuse imported artwork from the asset panel.
 - Apply one-, two-, three- and four-panel page layouts.
-- Add custom panels, titles, text and speech bubbles.
+- Add/split custom panels, titles, horizontal or vertical text and six speech-bubble variants.
 - Drag elements anywhere on the page.
 - Resize freely or preserve aspect ratio.
 - Rotate elements, with 15-degree snapping while holding Shift.
@@ -20,17 +20,19 @@ A functional browser editor for arranging, decorating, resizing, stretching, rot
 - Shift multi-select, selection rectangle, snapping guides, alignment and distribution.
 - Grayscale, contrast and corner-radius controls.
 - Layer selection, visibility, locking and ordering.
-- Add, duplicate, switch and delete pages.
+- Add, duplicate, drag-reorder and delete volumes, chapters and pages, including moving pages across chapters.
 - Undo, redo, autosave and keyboard nudging.
 - Grid and publishing safe-area overlays.
 - Smart Layout that arranges existing images deterministically.
-- Volume, chapter and page hierarchy with page ordering metadata.
+- Volume, chapter and page hierarchy with canonical ordering and safe ID remapping on duplication.
+- B5, A5, comic, A4, Webtoon and custom page presets with DPI, color mode, bleed, trim, safe-area and gutter metadata.
 - PNG (including transparent page backgrounds), JPG, PDF, CBZ, ZIP and complete sliced Webtoon export, plus `.cherrymanga` project archives.
 - IndexedDB binary asset storage with a local metadata fallback, migration and recovery-safe autosave.
 - Photoshop-style grouped tool catalog with Thai-first labels, English names, capability badges and disabled adapter states.
 - A unified element/Raster layer order used by both the editor and exporter.
 - Full-resolution page Raster layers with Canvas brush presets, alpha lock, selection masks, split-stroke layers, contiguous flood fill/erase, shapes, manga effect lines and color sampling.
-- Horizontal/vertical text with outline and shadow, plus a positionable speech-balloon tail.
+- Horizontal/vertical text and balloons with validated project-embedded TTF/OTF/WOFF fonts, basic Japanese kinsoku wrapping, outline, shadow, auto-fit, reusable style presets and multiple positionable tails.
+- Rotatable canvas, Navigator, multi-element free transform/scale/rotate/skew and eight-handle panel/image crop interactions.
 - Raster bitmap snapshots in IndexedDB and raster metadata/binaries inside `.cherrymanga` archives.
 - Typed CherryDeskX SSO, Workspace, Project and AI job adapters. Remote calls stay disabled until explicitly enabled with `VITE_ENABLE_CHERRYDESKX_API=true`.
 - Local browser persistence, Docker image and CI build/test validation.
@@ -77,6 +79,8 @@ Open `http://localhost:8088`. Health check: `http://localhost:8088/healthz`.
 | `U` | Line tool |
 | `Y` | Text tool |
 | `I` | Eyedropper tool |
+| `R` | Rotate canvas tool |
+| `W` | Magic Wand tool |
 | `Ctrl/Cmd + Z` | Undo |
 | `Ctrl/Cmd + Shift + Z` | Redo |
 | `Ctrl/Cmd + Y` | Redo |
@@ -94,12 +98,13 @@ The MVP deliberately uses framework-free TypeScript and DOM APIs. This keeps the
 
 ```text
 src/
-├── editor/       Actions, state/history, tool registry, raster engine, templates and DOM rendering
+├── app/          Pointer gesture controllers and app-level orchestration
+├── editor/       Typed actions, state/history, keyboard, tools, raster, transforms, typography and DOM rendering
 ├── persistence/  IndexedDB repositories, schema migration and .cherrymanga archive
 ├── integrations/ Typed CherryDeskX SSO, workspace, revision and AI contracts
 ├── security/     File signature checks and SVG sanitization
 ├── export.ts     Canvas renderer and PNG/JPG/PDF/CBZ/ZIP/Webtoon pipeline
-├── main.ts       Event wiring and editor bootstrap
+├── main.ts       Bootstrap and high-level DOM event routing
 ├── sample.ts     Starter project, element factories and original demo art
 ├── styles.css    Responsive editor design
 └── types.ts      Versioned project, hierarchy, asset and element contracts
@@ -111,7 +116,7 @@ The document model is JSON serializable and versioned. Uploaded assets and raste
 
 Project metadata is persisted through `ProjectRepository` in IndexedDB, with a localStorage metadata fallback when IndexedDB is unavailable. Uploaded binary assets are stored through `AssetRepository`; legacy data URLs are migrated on the next initialization. The remote CherryDeskX adapter is typed but disabled by default, so the editor never reports a fake cloud save.
 
-Project files use `.cherrymanga`: a validated store-only ZIP containing `project.json`, `assets/<asset-id>` and available `rasters/<bitmap-key>` snapshots. Import checks paths, sizes, checksums and schema compatibility. PNG/JPG export is page scoped by default; PDF, CBZ and Webtoon use the active chapter, while ZIP uses the whole project. Webtoon includes a long strip when browser Canvas limits permit and always produces complete height-bounded slices.
+Project files use `.cherrymanga`: a validated store-only ZIP containing `project.json`, `assets/<asset-id>` and available `rasters/<bitmap-key>` snapshots. Import checks paths, sizes, checksums and schema compatibility. Every format supports an explicit page/chapter/volume/project scope and 1×, 2×, 300-DPI or custom scaling. Webtoon includes a long strip when browser Canvas limits permit and always produces complete height-bounded slices.
 
 Copy `.env.example` to `.env` when preparing CherryDeskX integration. No token or secret belongs in Vite source, localStorage or project archives.
 
@@ -122,3 +127,5 @@ See [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md).
 ## Product roadmap
 
 See [`docs/PRODUCT_SPEC.md`](docs/PRODUCT_SPEC.md).
+
+The implemented/disabled boundary is tracked in [`docs/FOUNDATION_AUDIT.md`](docs/FOUNDATION_AUDIT.md).

@@ -7,6 +7,7 @@ import type {
   PanelElement,
   TextElement,
 } from "./types";
+import { PROJECT_SCHEMA_VERSION } from "./types";
 
 export const PAGE_WIDTH = 794;
 export const PAGE_HEIGHT = 1123;
@@ -118,6 +119,8 @@ export function createPanel(
     width,
     height,
     rotation: 0,
+    skewX: 0,
+    skewY: 0,
     opacity: 1,
     locked: false,
     hidden: false,
@@ -149,6 +152,8 @@ export function createImage(
     width,
     height,
     rotation: 0,
+    skewX: 0,
+    skewY: 0,
     opacity: 1,
     locked: false,
     hidden: false,
@@ -180,6 +185,8 @@ export function createText(
     width,
     height,
     rotation: 0,
+    skewX: 0,
+    skewY: 0,
     opacity: 1,
     locked: false,
     hidden: false,
@@ -199,6 +206,7 @@ export function createText(
     outlineWidth: 0,
     shadowColor: "#000000",
     shadowBlur: 0,
+    autoFit: false,
   };
 }
 
@@ -218,6 +226,8 @@ export function createBubble(
     width,
     height,
     rotation: 0,
+    skewX: 0,
+    skewY: 0,
     opacity: 1,
     locked: false,
     hidden: false,
@@ -233,10 +243,38 @@ export function createBubble(
     fontSize: 25,
     fontWeight: 750,
     align: "center",
+    fontFamily: "system-ui, sans-serif",
+    lineHeight: 1.26,
+    letterSpacing: 0,
+    writingMode: "horizontal",
+    outlineColor: "#000000",
+    outlineWidth: 0,
+    shadowColor: "#000000",
+    shadowBlur: 0,
+    autoFit: true,
     tailX: 72,
     tailY: 114,
     tails: [{ id: uid("tail"), x: 72, y: 114 }],
   };
+}
+
+function attachContainedStarterImages(page: MangaPage): void {
+  for (const element of page.elements) {
+    if (element.kind !== "image" || element.parentId) continue;
+    const centerX = element.x + element.width / 2;
+    const centerY = element.y + element.height / 2;
+    const panel = page.elements.find((candidate) => candidate.kind === "panel"
+      && centerX >= candidate.x
+      && centerX <= candidate.x + candidate.width
+      && centerY >= candidate.y
+      && centerY <= candidate.y + candidate.height);
+    if (!panel || panel.kind !== "panel") continue;
+    element.parentId = panel.id;
+    element.x -= panel.x;
+    element.y -= panel.y;
+    panel.clipChildren = true;
+  }
+  page.layerOrder = page.elements.map((element) => element.id);
 }
 
 export function createStarterProject(): MangaProject {
@@ -245,9 +283,9 @@ export function createStarterProject(): MangaProject {
   const art2 = makeCloseupArt();
   const art3 = makeNullArkArt();
   const assets: MangaAsset[] = [
-    { id: uid("asset"), name: "Cherry at orbit", src: art1, mimeType: "image/svg+xml", byteSize: art1.length, width: 900, height: 650, createdAt: now },
-    { id: uid("asset"), name: "Cherry close-up", src: art2, mimeType: "image/svg+xml", byteSize: art2.length, width: 760, height: 760, createdAt: now },
-    { id: uid("asset"), name: "NULL ARK", src: art3, mimeType: "image/svg+xml", byteSize: art3.length, width: 900, height: 600, createdAt: now },
+    { id: uid("asset"), kind: "image", name: "Cherry at orbit", src: art1, mimeType: "image/svg+xml", byteSize: art1.length, width: 900, height: 650, createdAt: now },
+    { id: uid("asset"), kind: "image", name: "Cherry close-up", src: art2, mimeType: "image/svg+xml", byteSize: art2.length, width: 760, height: 760, createdAt: now },
+    { id: uid("asset"), kind: "image", name: "NULL ARK", src: art3, mimeType: "image/svg+xml", byteSize: art3.length, width: 900, height: 600, createdAt: now },
   ];
 
   const [asset1, asset2, asset3] = assets;
@@ -307,10 +345,13 @@ export function createStarterProject(): MangaProject {
     layerOrder: [],
   };
 
+  attachContainedStarterImages(page1);
+  attachContainedStarterImages(page2);
+
   return {
     id: uid("project"),
     name: "NULL ARK — เล่ม 1",
-    schemaVersion: 3,
+    schemaVersion: PROJECT_SCHEMA_VERSION,
     readingDirection: "rtl",
     pagePreset: "manga-b5",
     dpi: 300,
@@ -326,6 +367,7 @@ export function createStarterProject(): MangaProject {
     chapters: [{ id: chapterId, volumeId, name: "บทที่ 1 — สัญญาณแรก", pageIds: [page1.id, page2.id], order: 0 }],
     pages: [page1, page2],
     assets,
+    textStyles: [],
     createdAt: now,
     updatedAt: now,
   };

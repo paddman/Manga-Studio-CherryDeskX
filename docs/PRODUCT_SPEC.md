@@ -21,7 +21,7 @@ Cherry Manga Studio is a browser-based visual editor for composing manga, comics
 - Image upload and reusable asset library.
 - Panel templates and custom panel creation.
 - Move, free resize, aspect-locked resize and rotation.
-- Text, title and four bubble variants.
+- Text, title and six bubble variants with multiple tails.
 - Element properties and layer controls.
 - Undo and redo history.
 - Safe-area and grid overlays.
@@ -29,12 +29,17 @@ Cherry Manga Studio is a browser-based visual editor for composing manga, comics
 - Native 2× PNG export.
 - True panel clipping with crop mode and crop position.
 - Multi-select, snapping guides, align/distribute, grouping and flip transforms.
-- Volume, chapter and page metadata with page manager controls.
+- Volume, chapter and page creation, duplication, drag reorder and cross-chapter page moves.
+- Publishing page presets and custom dimensions with DPI, color mode, bleed, trim, safe-area and gutter metadata.
 - PNG/JPG/PDF/CBZ/ZIP/Webtoon exports, transparent PNG support and validated `.cherrymanga` import/export.
 - IndexedDB asset repository with versioned migration.
 - Photoshop-style tool registry with a typed engine/keymap binding. A tool is enabled only when its interaction engine exists; unavailable local/cloud tools have explicit disabled/adapter states.
 - Unified page layer metadata with raster layers, alpha lock, selection masks, split-stroke layers and IndexedDB bitmap snapshots.
-- Local contiguous flood fill/erase, parameterized brushes, manga effect lines, vertical text, styled text and positionable balloon tails.
+- Local contiguous flood fill/erase, parameterized brushes, panel cutting, tones, manga effect lines and exact pixel selections.
+- Guarded local boundary-propagation Content-Aware Fill, labeled experimental and distinct from AI inpainting.
+- Straight and symmetry raster rulers with persistent replay semantics and non-exporting guides.
+- Vertical text, typography parity between text/balloons, auto-fit, reusable style presets, multiple positionable balloon tails, validated embedded font assets and basic Japanese kinsoku wrapping.
+- Rotate Canvas, Navigator and multi-selection free transform/scale/rotate/skew interactions.
 - Docker and Nginx deployment files.
 - GitHub Actions build validation.
 
@@ -49,8 +54,8 @@ The current branch implements the local-first foundation for the items above. Cl
 - Autosave revisions and collaborative editing.
 - Collaborative editing and server-side revision conflict handling.
 - Signed asset upload/download and server-side export workers.
-- Font management, Japanese line-breaking rules, auto-fit text and advanced SFX lettering.
-- Advanced vector paths, complete rulers, reusable styles and production typography.
+- Font subsetting/licence inspection, full JIS X 4051 line composition and advanced SFX lettering.
+- Advanced vector paths, complete rulers and server/worker-backed high-resolution export.
 
 ## AI phase
 

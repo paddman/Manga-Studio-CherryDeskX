@@ -13,6 +13,7 @@ Open `http://localhost:4173`.
 
 ```bash
 npm install
+npm run typecheck
 npm test
 npm run build
 npm run preview
@@ -27,7 +28,7 @@ docker compose up -d --build
 curl http://127.0.0.1:8088/healthz
 ```
 
-The application is then available on port `8088`.
+The application is then available to the host reverse proxy at `127.0.0.1:8088`. The Compose port is intentionally not exposed on public interfaces.
 
 ## Reverse proxy and DNS
 
@@ -63,6 +64,9 @@ sudo ln -s /etc/nginx/sites-available/manga.cherrydeskx.com \
   /etc/nginx/sites-enabled/manga.cherrydeskx.com
 sudo nginx -t
 sudo systemctl reload nginx
+
+curl -fsS http://127.0.0.1:8088/healthz
+curl -fsS https://manga.cherrydeskx.com/ | grep 'Cherry Manga Studio'
 ```
 
 Use a certificate whose origin coverage includes this hostname when the proxy
@@ -71,11 +75,28 @@ deployment-specific.
 
 ## Persistence model
 
-The editor stores versioned project metadata in IndexedDB and binary assets/raster snapshots in separate IndexedDB object stores. `localStorage` is retained only as a metadata recovery fallback. Legacy MVP data URLs are migrated to the binary store during initialization. `.cherrymanga` files are portable, validated ZIP archives containing `project.json`, asset binaries and available raster snapshots.
+The editor stores versioned project metadata in IndexedDB and image/font assets plus raster snapshots in separate IndexedDB object stores. `localStorage` is retained only as a metadata recovery fallback. Legacy MVP data URLs are migrated to the binary store during initialization. `.cherrymanga` files are portable, validated ZIP archives containing `project.json`, asset binaries and available raster snapshots. Production CSP must allow `font-src blob:` for embedded fonts and same-origin workers for export packaging; the included `nginx.conf` already does so.
 
 CherryDeskX HTTP, SSO, Workspace and AI adapters are present as typed contracts but are disabled unless `VITE_ENABLE_CHERRYDESKX_API=true`. The default deployment therefore has an explicit local/offline state and does not claim cloud persistence or AI completion.
 
 Copy `.env.example` to `.env` and set the public, non-secret URLs before enabling an API gateway. Never place access tokens in `VITE_*` variables.
+
+## Release procedure
+
+Deploy only a reviewed commit whose CI is green:
+
+```bash
+git fetch origin
+git switch main
+git pull --ff-only origin main
+docker compose build --pull
+docker compose up -d --remove-orphans
+docker compose ps
+curl -fsS http://127.0.0.1:8088/healthz
+curl -fsSIL https://manga.cherrydeskx.com/
+```
+
+The image uses `npm ci` with the committed lockfile, emits no production source map, runs behind Nginx with `no-new-privileges`, and binds the container only to loopback. A failed health check leaves the previous image available for an explicit Compose rollback; do not delete the previous image until the public smoke check succeeds.
 
 ## Recommended production additions
 
@@ -85,4 +106,4 @@ Copy `.env.example` to `.env` and set the public, non-secret URLs before enablin
 - Redis queue for export and AI jobs.
 - Antivirus and file-type validation for uploads.
 - Rate limits, tenant quotas and audit logs.
-- End-to-end browser automation against the deployed reverse proxy (the repository already has unit, interaction-helper, render-smoke, export and archive round-trip coverage).
+- End-to-end browser automation against the deployed reverse proxy (the repository already has unit, DOM interaction, render-smoke, export and archive round-trip coverage).

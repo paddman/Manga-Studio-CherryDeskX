@@ -1,6 +1,9 @@
 import { brushPreset } from "./tools";
 import type { MangaPage, PixelSelectionShape, RasterLayer, RasterPoint, RasterStroke } from "../types";
 import { isRasterLayer, orderedPageLayers } from "./layers";
+import { applyRetouchPixels, isLocalRetouchPreset } from "./retouch";
+import { mirrorPointAcrossRuler } from "./interactions";
+import { contentAwareFillPixels } from "./content-aware";
 
 export const MAX_RASTER_DIMENSION = 16_384;
 export const MAX_RASTER_PIXELS = 32_000_000;
@@ -24,6 +27,10 @@ function drawPolyline(ctx: CanvasRenderingContext2D, points: RasterPoint[]): voi
 
 function selectionPath(ctx: CanvasRenderingContext2D, selection: PixelSelectionShape): void {
   ctx.beginPath();
+  if (selection.mode === "pixels") {
+    for (const span of selection.spans ?? []) ctx.rect(span.x, span.y, span.width, 1);
+    return;
+  }
   if (selection.mode === "rectangle") {
     ctx.rect(selection.x, selection.y, selection.width, selection.height);
     return;
@@ -53,6 +60,22 @@ function withSelection(ctx: CanvasRenderingContext2D, selection: PixelSelectionS
 
 function pointInSelection(x: number, y: number, selection: PixelSelectionShape | undefined): boolean {
   if (!selection) return true;
+  if (selection.mode === "pixels") {
+    const spans = selection.spans ?? [];
+    const row = Math.floor(y);
+    let low = 0;
+    let high = spans.length;
+    while (low < high) {
+      const middle = Math.floor((low + high) / 2);
+      if ((spans[middle]?.y ?? Number.MAX_SAFE_INTEGER) < row) low = middle + 1;
+      else high = middle;
+    }
+    for (let index = low; index < spans.length && spans[index]?.y === row; index += 1) {
+      const span = spans[index]!;
+      if (x >= span.x && x < span.x + span.width) return true;
+    }
+    return false;
+  }
   if (selection.mode === "rectangle") return x >= selection.x && x <= selection.x + selection.width && y >= selection.y && y <= selection.y + selection.height;
   if (selection.mode === "ellipse") {
     const radiusX = Math.max(1, selection.width / 2);
@@ -202,9 +225,9 @@ function drawSpray(ctx: CanvasRenderingContext2D, points: RasterPoint[], size: n
   }
 }
 
-function drawMangaEffectStroke(ctx: CanvasRenderingContext2D, stroke: RasterStroke, width: number, height: number): boolean {
-  const start = stroke.points[0];
-  const end = stroke.points.at(-1);
+function drawMangaEffectStroke(ctx: CanvasRenderingContext2D, stroke: RasterStroke, width: number, height: number, points: RasterPoint[]): boolean {
+  const start = points[0];
+  const end = points.at(-1);
   if (!start || !end) return false;
   if (stroke.preset === "focus-line") {
     const radius = Math.max(width, height) * 1.1;
@@ -238,16 +261,15 @@ function drawMangaEffectStroke(ctx: CanvasRenderingContext2D, stroke: RasterStro
   if (stroke.preset === "effect-line") {
     for (let offset = -1; offset <= 1; offset += 1) {
       ctx.globalAlpha = stroke.opacity * (offset === 0 ? 1 : 0.35);
-      drawPolyline(ctx, stroke.points.map((point, index) => ({ ...point, y: point.y + offset * (2 + (index % 3)) })));
+      drawPolyline(ctx, points.map((point, index) => ({ ...point, y: point.y + offset * (2 + (index % 3)) })));
     }
     return true;
   }
   return false;
 }
 
-function drawBrushStroke(ctx: CanvasRenderingContext2D, stroke: RasterStroke, width: number, height: number): void {
+function drawBrushPath(ctx: CanvasRenderingContext2D, stroke: RasterStroke, width: number, height: number, points: RasterPoint[]): void {
   const preset = brushPreset(stroke.preset);
-  const points = stroke.points;
   if (!points.length) return;
   const size = Math.max(1, stroke.size * preset.sizeMultiplier);
   ctx.globalCompositeOperation = stroke.blendMode;
@@ -258,7 +280,7 @@ function drawBrushStroke(ctx: CanvasRenderingContext2D, stroke: RasterStroke, wi
   ctx.lineWidth = size;
   ctx.globalAlpha = Math.min(1, Math.max(0, stroke.opacity * preset.opacity));
 
-  if (drawMangaEffectStroke(ctx, stroke, width, height)) return;
+  if (drawMangaEffectStroke(ctx, stroke, width, height, points)) return;
 
   if (preset.engine === "eraser") {
     for (const point of points) drawSoftStamp(ctx, point, size, "#000000", stroke.opacity * preset.opacity, preset.hardness);
@@ -285,6 +307,14 @@ function drawBrushStroke(ctx: CanvasRenderingContext2D, stroke: RasterStroke, wi
     return;
   }
   drawPolyline(ctx, points);
+}
+
+function drawBrushStroke(ctx: CanvasRenderingContext2D, stroke: RasterStroke, width: number, height: number): void {
+  drawBrushPath(ctx, stroke, width, height, stroke.points);
+  const axis = stroke.mirrorAxis;
+  if (axis?.kind === "symmetry") {
+    drawBrushPath(ctx, stroke, width, height, stroke.points.map((point) => mirrorPointAcrossRuler(point, axis)));
+  }
 }
 
 function drawShape(ctx: CanvasRenderingContext2D, stroke: RasterStroke): void {
@@ -350,12 +380,42 @@ function drawShape(ctx: CanvasRenderingContext2D, stroke: RasterStroke): void {
   ctx.strokeRect(x, y, width, height);
 }
 
+function drawTonePattern(ctx: CanvasRenderingContext2D, stroke: RasterStroke, width: number, height: number): boolean {
+  if (stroke.preset !== "manga-tone" && stroke.preset !== "screentone" && stroke.preset !== "gradient-tone") return false;
+  const spacing = Math.max(5, Math.min(28, Math.round(stroke.size * 0.75)));
+  ctx.globalCompositeOperation = stroke.blendMode;
+  ctx.fillStyle = stroke.color;
+  ctx.strokeStyle = stroke.color;
+  ctx.globalAlpha = Math.min(1, stroke.opacity);
+  if (stroke.preset === "manga-tone") {
+    ctx.lineWidth = Math.max(1, spacing * 0.16);
+    for (let offset = -height; offset < width + height; offset += spacing) {
+      ctx.beginPath();
+      ctx.moveTo(offset, 0);
+      ctx.lineTo(offset - height, height);
+      ctx.stroke();
+    }
+    return true;
+  }
+  for (let y = spacing / 2; y < height; y += spacing) {
+    for (let x = spacing / 2; x < width; x += spacing) {
+      const gradientFactor = stroke.preset === "gradient-tone" ? Math.max(0.08, Math.min(1, y / Math.max(1, height))) : 0.46;
+      const radius = Math.max(0.7, spacing * 0.34 * gradientFactor);
+      ctx.beginPath();
+      ctx.arc(x + (Math.floor(y / spacing) % 2 ? spacing / 2 : 0), y, radius, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+  return true;
+}
+
 function drawSpecialStroke(ctx: CanvasRenderingContext2D, stroke: RasterStroke, width: number, height: number): void {
   if (stroke.kind === "bucket" || stroke.kind === "erase-fill") {
     floodFill(ctx, stroke, width, height, stroke.kind === "erase-fill");
     return;
   }
   if (stroke.kind === "fill") {
+    if (drawTonePattern(ctx, stroke, width, height)) return;
     ctx.globalCompositeOperation = stroke.blendMode;
     ctx.globalAlpha = stroke.opacity;
     ctx.fillStyle = stroke.color;
@@ -376,6 +436,26 @@ function drawSpecialStroke(ctx: CanvasRenderingContext2D, stroke: RasterStroke, 
 }
 
 export function drawStroke(ctx: CanvasRenderingContext2D, stroke: RasterStroke, width: number, height: number): void {
+  if (stroke.kind === "content-fill") {
+    if (!stroke.selection) return;
+    const image = ctx.getImageData(0, 0, width, height);
+    contentAwareFillPixels(image.data, width, height, stroke.selection, stroke.opacity, stroke.preserveAlpha);
+    ctx.putImageData(image, 0, 0);
+    return;
+  }
+  if (stroke.kind === "filter") {
+    if (!isLocalRetouchPreset(stroke.preset)) return;
+    const image = ctx.getImageData(0, 0, width, height);
+    applyRetouchPixels(image.data, width, height, {
+      preset: stroke.preset,
+      points: stroke.points,
+      size: stroke.size,
+      opacity: stroke.opacity,
+      selection: stroke.selection,
+    });
+    ctx.putImageData(image, 0, 0);
+    return;
+  }
   if (stroke.kind === "bucket" || stroke.kind === "erase-fill") {
     drawSpecialStroke(ctx, stroke, width, height);
     return;
@@ -398,7 +478,7 @@ function initializeCanvas(canvas: HTMLCanvasElement, page: MangaPage): CanvasRen
 }
 
 function drawAlphaLockedStroke(ctx: CanvasRenderingContext2D, stroke: RasterStroke, width: number, height: number): void {
-  if (!stroke.preserveAlpha || stroke.blendMode === "destination-out") {
+  if (!stroke.preserveAlpha || stroke.blendMode === "destination-out" || stroke.kind === "filter" || stroke.kind === "content-fill") {
     drawStroke(ctx, stroke, width, height);
     return;
   }
