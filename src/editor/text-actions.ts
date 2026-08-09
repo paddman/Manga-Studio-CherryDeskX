@@ -67,6 +67,14 @@ export function applyTextStylePreset(styleId: string): boolean {
   return true;
 }
 
+export function applyEmbeddedFont(assetId: string): boolean {
+  const element = selectedElement();
+  const asset = runtime.project.assets.find((candidate) => candidate.id === assetId && candidate.kind === "font");
+  if (!isStyledElement(element) || !asset?.fontFamily) return false;
+  transact(() => { element.fontFamily = asset.fontFamily!; });
+  return true;
+}
+
 export function removeTextStylePreset(styleId: string): boolean {
   const index = runtime.project.textStyles.findIndex((style) => style.id === styleId);
   if (index < 0) return false;

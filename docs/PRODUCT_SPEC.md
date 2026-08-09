@@ -36,7 +36,7 @@ Cherry Manga Studio is a browser-based visual editor for composing manga, comics
 - Photoshop-style tool registry with a typed engine/keymap binding. A tool is enabled only when its interaction engine exists; unavailable local/cloud tools have explicit disabled/adapter states.
 - Unified page layer metadata with raster layers, alpha lock, selection masks, split-stroke layers and IndexedDB bitmap snapshots.
 - Local contiguous flood fill/erase, parameterized brushes, panel cutting, tones, manga effect lines and exact pixel selections.
-- Vertical text, typography parity between text/balloons, auto-fit, reusable style presets and multiple positionable balloon tails.
+- Vertical text, typography parity between text/balloons, auto-fit, reusable style presets, multiple positionable balloon tails, validated embedded font assets and basic Japanese kinsoku wrapping.
 - Rotate Canvas, Navigator and multi-selection free transform/scale/rotate/skew interactions.
 - Docker and Nginx deployment files.
 - GitHub Actions build validation.
@@ -52,7 +52,7 @@ The current branch implements the local-first foundation for the items above. Cl
 - Autosave revisions and collaborative editing.
 - Collaborative editing and server-side revision conflict handling.
 - Signed asset upload/download and server-side export workers.
-- Font asset embedding, Japanese line-breaking rules and advanced SFX lettering.
+- Font subsetting/licence inspection, full JIS X 4051 line composition and advanced SFX lettering.
 - Advanced vector paths, complete rulers and server/worker-backed high-resolution export.
 
 ## AI phase

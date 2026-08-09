@@ -31,7 +31,7 @@ A functional browser editor for arranging, decorating, resizing, stretching, rot
 - Photoshop-style grouped tool catalog with Thai-first labels, English names, capability badges and disabled adapter states.
 - A unified element/Raster layer order used by both the editor and exporter.
 - Full-resolution page Raster layers with Canvas brush presets, alpha lock, selection masks, split-stroke layers, contiguous flood fill/erase, shapes, manga effect lines and color sampling.
-- Horizontal/vertical text and balloons with font controls, outline, shadow, auto-fit, reusable style presets and multiple positionable tails.
+- Horizontal/vertical text and balloons with validated project-embedded TTF/OTF/WOFF fonts, basic Japanese kinsoku wrapping, outline, shadow, auto-fit, reusable style presets and multiple positionable tails.
 - Rotatable canvas, Navigator, multi-element free transform/scale/rotate/skew and eight-handle panel/image crop interactions.
 - Raster bitmap snapshots in IndexedDB and raster metadata/binaries inside `.cherrymanga` archives.
 - Typed CherryDeskX SSO, Workspace, Project and AI job adapters. Remote calls stay disabled until explicitly enabled with `VITE_ENABLE_CHERRYDESKX_API=true`.

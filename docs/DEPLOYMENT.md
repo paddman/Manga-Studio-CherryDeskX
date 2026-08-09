@@ -75,7 +75,7 @@ deployment-specific.
 
 ## Persistence model
 
-The editor stores versioned project metadata in IndexedDB and binary assets/raster snapshots in separate IndexedDB object stores. `localStorage` is retained only as a metadata recovery fallback. Legacy MVP data URLs are migrated to the binary store during initialization. `.cherrymanga` files are portable, validated ZIP archives containing `project.json`, asset binaries and available raster snapshots.
+The editor stores versioned project metadata in IndexedDB and image/font assets plus raster snapshots in separate IndexedDB object stores. `localStorage` is retained only as a metadata recovery fallback. Legacy MVP data URLs are migrated to the binary store during initialization. `.cherrymanga` files are portable, validated ZIP archives containing `project.json`, asset binaries and available raster snapshots. Production CSP must allow `font-src blob:` for embedded fonts and same-origin workers for export packaging; the included `nginx.conf` already does so.
 
 CherryDeskX HTTP, SSO, Workspace and AI adapters are present as typed contracts but are disabled unless `VITE_ENABLE_CHERRYDESKX_API=true`. The default deployment therefore has an explicit local/offline state and does not claim cloud persistence or AI completion.
 

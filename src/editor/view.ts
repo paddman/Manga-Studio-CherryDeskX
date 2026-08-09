@@ -16,6 +16,7 @@ import { isRasterLayer, orderedPageLayers } from "./layers";
 import { PAGE_PRESETS } from "./document";
 import { rotatedViewportSize } from "./interactions";
 import { fittedFontSize } from "./typography";
+import { embeddedFontStatus } from "./font-assets";
 
 function escapeHtml(value: string): string {
   return value
@@ -161,13 +162,14 @@ function renderLeftContent(): string {
 
 function renderAssetsPanel(): string {
   const selected = selectedElement();
-  const cards = runtime.project.assets
+  const imageAssets = runtime.project.assets.filter((asset) => asset.kind === "image");
+  const cards = imageAssets
     .map(
       (asset) => `<button class="asset-card" data-add-asset="${escapeHtml(asset.id)}" title="เพิ่ม ${escapeHtml(asset.name)} ลงหน้า"><img src="${escapeHtml(asset.src)}" alt="${escapeHtml(asset.name)}"/><span>${escapeHtml(asset.name)}</span></button>`,
     )
     .join("");
   return `
-    <div class="panel-heading"><div><span class="eyebrow">LIBRARY</span><h2>รูปและองค์ประกอบ</h2></div><span class="count-badge">${runtime.project.assets.length}</span></div>
+    <div class="panel-heading"><div><span class="eyebrow">LIBRARY</span><h2>รูปและองค์ประกอบ</h2></div><span class="count-badge">${imageAssets.length}</span></div>
     ${selected?.kind === "image" ? renderImageTools(selected) : ""}
     <button type="button" class="upload-zone" data-action="open-upload">${icon("plus")}<strong>อัปโหลดรูป</strong><span>PNG, JPG, WEBP หรือ SVG</span></button>
     <input type="file" data-upload-input accept="image/png,image/jpeg,image/webp,image/svg+xml" multiple hidden aria-label="เลือกไฟล์รูป" />
@@ -203,12 +205,23 @@ function renderPanelsPanel(): string {
 }
 
 function renderTextPanel(): string {
+  const fonts = runtime.project.assets.filter((asset) => asset.kind === "font" && asset.fontFamily);
+  const fontCards = fonts.map((asset) => {
+    const capability = embeddedFontStatus(asset.id);
+    const status = capability.status === "ready" ? "พร้อม" : capability.status === "error" ? "โหลดไม่ได้" : "กำลังโหลด";
+    return `<div class="text-style-row"><button data-apply-font="${escapeHtml(asset.id)}" style="font-family:${escapeHtml(asset.fontFamily ?? "sans-serif")}" ${capability.status === "ready" ? "" : "disabled"} title="${escapeHtml(capability.reason ?? status)}"><strong>${escapeHtml(asset.fontFamily ?? asset.name)}</strong><span>${escapeHtml(asset.name)} • ${(asset.byteSize / 1024).toFixed(0)} KB • ${status}</span></button><button data-remove-font="${escapeHtml(asset.id)}" title="ลบฟอนต์ฝัง">×</button></div>`;
+  }).join("");
   return `
     <div class="panel-heading"><div><span class="eyebrow">LETTERING</span><h2>ข้อความและบอลลูน</h2></div></div>
     <button class="text-preset title-preset" data-action="add-title"><span>CHAPTER TITLE</span><strong>หัวเรื่องมังงะ</strong></button>
     <button class="text-preset body-preset" data-action="add-text"><strong>เพิ่มข้อความธรรมดา</strong><span>คำบรรยายและ SFX</span></button>
     <div class="section-label">บอลลูนคำพูด</div>
     <div class="bubble-grid">${bubblePreset("speech", "พูดปกติ")}${bubblePreset("thought", "ความคิด")}${bubblePreset("shout", "ตะโกน")}${bubblePreset("whisper", "กระซิบ")}${bubblePreset("caption", "แคปชัน")}${bubblePreset("narration", "คำบรรยาย")}</div>
+    <div class="section-label">ฟอนต์ฝังในโปรเจกต์</div>
+    <button type="button" class="wide-action subtle" data-action="open-font-upload">+ ฝังฟอนต์ TTF / OTF / WOFF</button>
+    <input type="file" data-font-upload-input accept=".ttf,.otf,.woff,.woff2,font/ttf,font/otf,font/woff,font/woff2" multiple hidden aria-label="เลือกไฟล์ฟอนต์" />
+    <div class="text-style-list">${fontCards || `<span class="sidebar-note">ยังไม่มีฟอนต์ฝังในโปรเจกต์</span>`}</div>
+    <div class="sidebar-note">ฝังเฉพาะฟอนต์ที่คุณมีสิทธิ์ใช้และแจกไปกับไฟล์โปรเจกต์</div>
     <div class="sidebar-note">ดับเบิลคลิกข้อความบนหน้าเพื่อแก้เนื้อหาได้ทันที</div>
   `;
 }

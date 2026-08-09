@@ -71,7 +71,8 @@ import {
 import { renderApp } from "./editor/view";
 import { applyPagePreset, setDocumentMetadata, type DocumentMetadataProperty } from "./editor/document";
 import { splitPanelAtPoint } from "./editor/panels";
-import { addBubbleTail, applyTextStylePreset, removeBubbleTail, removeTextStylePreset, saveSelectedTextStyle } from "./editor/text-actions";
+import { addBubbleTail, applyEmbeddedFont, applyTextStylePreset, removeBubbleTail, removeTextStylePreset, saveSelectedTextStyle } from "./editor/text-actions";
+import { handleFontUploads, registerProjectFonts, removeEmbeddedFont } from "./editor/font-assets";
 import { handleEditorKeydown } from "./editor/keyboard";
 import { createGestureController, pagePosition } from "./app/gestures";
 import type { BubbleVariant, ExportFormat, ExportScaleMode, ExportScope, LeftTab, PagePreset, PixelSelectionShape, RasterPoint, RasterStroke, TextAlign, Tool } from "./types";
@@ -521,6 +522,7 @@ function importProjectFile(): void {
       }));
       await Promise.all([...bundle.rasters.entries()].map(async ([bitmapKey, blob]) => runtime.persistence.rasters.put(bitmapKey, blob)));
       hydrateAssetSources(runtime.project, runtime.assetSources);
+      await registerProjectFonts(runtime.project);
       setSelection([]);
       persistProject();
       render();
@@ -588,6 +590,10 @@ async function handleAction(action: string): Promise<void> {
   }
   if (action === "open-upload") {
     document.querySelector<HTMLInputElement>("[data-upload-input]")?.click();
+    return;
+  }
+  if (action === "open-font-upload") {
+    document.querySelector<HTMLInputElement>("[data-font-upload-input]")?.click();
     return;
   }
   if (action === "add-raster-layer") {
@@ -719,6 +725,19 @@ appRoot.addEventListener("click", (event) => {
   const textStyleId = target.closest<HTMLElement>("[data-apply-text-style]")?.dataset.applyTextStyle;
   if (textStyleId) {
     if (applyTextStylePreset(textStyleId)) rerender("ใช้ Text style แล้ว");
+    return;
+  }
+
+  const fontAssetId = target.closest<HTMLElement>("[data-apply-font]")?.dataset.applyFont;
+  if (fontAssetId) {
+    if (applyEmbeddedFont(fontAssetId)) rerender("ใช้ฟอนต์ที่ฝังแล้ว");
+    else showToast("เลือกข้อความหรือบอลลูนก่อนใช้ฟอนต์", "default");
+    return;
+  }
+
+  const removeFontId = target.closest<HTMLElement>("[data-remove-font]")?.dataset.removeFont;
+  if (removeFontId) {
+    if (removeEmbeddedFont(removeFontId)) rerender("ลบฟอนต์ฝังและใช้ฟอนต์ระบบแทนแล้ว");
     return;
   }
 
@@ -873,6 +892,15 @@ appRoot.addEventListener("change", (event) => {
       .finally(() => {
         input.value = "";
       });
+    return;
+  }
+
+  if (target.matches("[data-font-upload-input]") && target instanceof HTMLInputElement) {
+    const input = target;
+    void handleFontUploads(input.files)
+      .then((count) => rerender(`ฝังฟอนต์ ${count} ไฟล์แล้ว`))
+      .catch((error: unknown) => showToast(error instanceof Error ? error.message : "ฝังฟอนต์ไม่สำเร็จ", "danger"))
+      .finally(() => { input.value = ""; });
     return;
   }
 

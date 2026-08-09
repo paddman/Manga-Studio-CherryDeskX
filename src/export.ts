@@ -808,6 +808,7 @@ async function canvasToPng(canvas: HTMLCanvasElement, height: number): Promise<B
 }
 
 export async function exportProject(project: MangaProject, filename: string, options: ExportOptions): Promise<void> {
+  if (typeof document !== "undefined" && document.fonts) await document.fonts.ready;
   const pages = pagesForScope(project, options.scope ?? "page");
   if (!pages.length) throw new Error("ขอบเขตที่เลือกไม่มีหน้าสำหรับส่งออก");
   const scale = Math.max(0.25, options.scale ?? 2);

@@ -61,12 +61,14 @@ function normalizeAsset(value: unknown, index: number): MangaAsset {
   const source = isRecord(value) ? value : {};
   return {
     id: stringValue(source.id, `asset_migrated_${index}`),
+    kind: source.kind === "font" || String(source.mimeType ?? "").startsWith("font/") ? "font" : "image",
     name: stringValue(source.name, `รูปภาพ ${index + 1}`),
     src: imageSource(source.src),
     mimeType: stringValue(source.mimeType, "image/*"),
     byteSize: numberValue(source.byteSize ?? source.size, 0),
     width: numberValue(source.width, 0),
     height: numberValue(source.height, 0),
+    fontFamily: source.kind === "font" || String(source.mimeType ?? "").startsWith("font/") ? fontFamilyValue(source.fontFamily ?? source.name) : undefined,
     createdAt: stringValue(source.createdAt, new Date(0).toISOString()),
   };
 }

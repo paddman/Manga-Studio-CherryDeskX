@@ -116,6 +116,7 @@ async function readAsset(file: File): Promise<LoadedAsset> {
   const height = Math.max(120, dimensions.height * ratio);
   const asset: MangaAsset = {
     id: uid("asset"),
+    kind: "image",
     name: file.name,
     src,
     mimeType: blob.type,
@@ -158,7 +159,7 @@ export async function handleUploads(files: FileList | null, replaceSelected = fa
 
 export async function addAssetToPage(assetId: string): Promise<boolean> {
   const asset = runtime.project.assets.find((item) => item.id === assetId);
-  if (!asset) return false;
+  if (!asset || asset.kind !== "image") return false;
   const dimensions = await imageDimensions(asset.src);
   const scale = Math.min(430 / dimensions.width, 430 / dimensions.height, 1);
   transact(() => {
@@ -606,10 +607,15 @@ export function removeOrphanAssets(): number {
   for (const page of runtime.project.pages) {
     for (const element of page.elements) if (element.kind === "image" && element.assetId) used.add(element.assetId);
   }
-  const orphaned = runtime.project.assets.filter((asset) => !used.has(asset.id));
+  const usedFontFamilies = new Set(runtime.project.textStyles.map((style) => style.fontFamily));
+  for (const page of runtime.project.pages) {
+    for (const element of page.elements) if (element.kind === "text" || element.kind === "bubble") usedFontFamilies.add(element.fontFamily);
+  }
+  for (const asset of runtime.project.assets) if (asset.kind === "font" && asset.fontFamily && usedFontFamilies.has(asset.fontFamily)) used.add(asset.id);
+  const orphaned = runtime.project.assets.filter((asset) => asset.kind === "image" && !used.has(asset.id));
   if (!orphaned.length) return 0;
   transact(() => {
-    runtime.project.assets = runtime.project.assets.filter((asset) => used.has(asset.id));
+    runtime.project.assets = runtime.project.assets.filter((asset) => asset.kind === "font" || used.has(asset.id));
     for (const asset of orphaned) {
       const source = runtime.assetSources.get(asset.id);
       if (source?.startsWith("blob:")) URL.revokeObjectURL(source);

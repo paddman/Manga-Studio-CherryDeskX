@@ -10,7 +10,7 @@ export type ExportFormat = "png" | "jpg" | "pdf" | "cbz" | "zip" | "webtoon";
 export type ExportScope = "page" | "chapter" | "volume" | "project";
 export type ExportScaleMode = "1x" | "2x" | "300dpi" | "custom";
 
-export const PROJECT_SCHEMA_VERSION = 5;
+export const PROJECT_SCHEMA_VERSION = 6;
 
 export type ToolId = string & { readonly __toolId: unique symbol };
 export type Tool = ToolId;
@@ -203,12 +203,14 @@ export interface TextStylePreset {
 
 export interface MangaAsset {
   id: string;
+  kind: "image" | "font";
   name: string;
   src: string;
   mimeType: string;
   byteSize: number;
   width: number;
   height: number;
+  fontFamily?: string;
   createdAt: string;
 }
 

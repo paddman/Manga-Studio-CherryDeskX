@@ -7,6 +7,7 @@ import type {
   PanelElement,
   TextElement,
 } from "./types";
+import { PROJECT_SCHEMA_VERSION } from "./types";
 
 export const PAGE_WIDTH = 794;
 export const PAGE_HEIGHT = 1123;
@@ -282,9 +283,9 @@ export function createStarterProject(): MangaProject {
   const art2 = makeCloseupArt();
   const art3 = makeNullArkArt();
   const assets: MangaAsset[] = [
-    { id: uid("asset"), name: "Cherry at orbit", src: art1, mimeType: "image/svg+xml", byteSize: art1.length, width: 900, height: 650, createdAt: now },
-    { id: uid("asset"), name: "Cherry close-up", src: art2, mimeType: "image/svg+xml", byteSize: art2.length, width: 760, height: 760, createdAt: now },
-    { id: uid("asset"), name: "NULL ARK", src: art3, mimeType: "image/svg+xml", byteSize: art3.length, width: 900, height: 600, createdAt: now },
+    { id: uid("asset"), kind: "image", name: "Cherry at orbit", src: art1, mimeType: "image/svg+xml", byteSize: art1.length, width: 900, height: 650, createdAt: now },
+    { id: uid("asset"), kind: "image", name: "Cherry close-up", src: art2, mimeType: "image/svg+xml", byteSize: art2.length, width: 760, height: 760, createdAt: now },
+    { id: uid("asset"), kind: "image", name: "NULL ARK", src: art3, mimeType: "image/svg+xml", byteSize: art3.length, width: 900, height: 600, createdAt: now },
   ];
 
   const [asset1, asset2, asset3] = assets;
@@ -350,7 +351,7 @@ export function createStarterProject(): MangaProject {
   return {
     id: uid("project"),
     name: "NULL ARK — เล่ม 1",
-    schemaVersion: 5,
+    schemaVersion: PROJECT_SCHEMA_VERSION,
     readingDirection: "rtl",
     pagePreset: "manga-b5",
     dpi: 300,

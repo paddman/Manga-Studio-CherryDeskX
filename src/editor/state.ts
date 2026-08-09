@@ -1,6 +1,7 @@
 import { createStarterProject } from "../sample";
 import { createPersistenceRepositories, type PersistenceRepositories } from "../persistence/repository";
 import { hydrateAssetSources, migrateProject, serializeProject } from "../persistence/serialization";
+import { registerProjectFonts } from "./font-assets";
 import { toolId } from "./tools";
 import type { EditorPreferences, MangaElement, MangaPage, MangaProject, PixelSelectionShape, RasterStroke, SelectionGuide } from "../types";
 
@@ -219,6 +220,7 @@ export async function initializePersistence(): Promise<void> {
       runtime.assetSources.set(asset.id, objectUrl);
     }
     hydrateAssetSources(runtime.project, sources);
+    await registerProjectFonts(runtime.project);
     runtime.persistenceReady = true;
     runtime.saveStatus = "saved";
     runtime.storageError = null;
@@ -280,6 +282,7 @@ export function transact(mutator: () => void): boolean {
 function restoreSnapshot(value: string): void {
   runtime.project = migrateProject(JSON.parse(value) as unknown);
   hydrateAssetSources(runtime.project, runtime.assetSources);
+  void registerProjectFonts(runtime.project);
   runtime.selectedId = null;
   runtime.selectedIds = [];
   runtime.preferences.cropElementId = null;

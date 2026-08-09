@@ -27,7 +27,7 @@ RuntimeState -> editor/view (DOM preview)
 - `src/editor/view.ts` renders HTML from state and does not own project mutations.
 - `src/editor/raster.ts` replays full-resolution raster operations; `src/export.ts` renders the same layer order into downloadable formats.
 
-A pointer drag calls `checkpoint()` once at pointer-down and persists once at pointer-up, so pointer moves do not flood history. Project schema migration currently normalizes legacy documents to `PROJECT_SCHEMA_VERSION` 5, including hierarchy, raster layers, exact pixel-span selections, transform defaults, typography, multiple balloon tails and reusable text styles.
+A pointer drag calls `checkpoint()` once at pointer-down and persists once at pointer-up, so pointer moves do not flood history. Project schema migration currently normalizes legacy documents to `PROJECT_SCHEMA_VERSION` 6, including hierarchy, raster layers, exact pixel-span selections, transform defaults, typography, multiple balloon tails, reusable text styles and typed image/font assets.
 
 ## Panel, selection and raster model
 
@@ -41,7 +41,7 @@ A pointer drag calls `checkpoint()` once at pointer-down and persists once at po
 
 ## Persistence and integration
 
-`ProjectRepository`, `AssetRepository` and `RasterRepository` are stable typed boundaries. IndexedDB is the browser implementation; a local metadata fallback and in-memory binary repositories keep unsupported/offline environments explicit. Legacy localStorage data URLs are migrated into the asset repository during initialization.
+`ProjectRepository`, `AssetRepository` and `RasterRepository` are stable typed boundaries. IndexedDB is the browser implementation; a local metadata fallback and in-memory binary repositories keep unsupported/offline environments explicit. Legacy localStorage data URLs are migrated into the asset repository during initialization. Validated TTF/OTF/WOFF assets use the same binary repository, are registered through `FontFace`, and travel inside `.cherrymanga` archives.
 
 `.cherrymanga` is a validated ZIP archive containing versioned `project.json`, asset blobs and raster snapshots. Import validates paths, entry sizes, CRC checksums and supported schema before replacing editor state.
 

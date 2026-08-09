@@ -3,7 +3,7 @@ import { createStarterProject } from "../src/sample";
 import { MemoryAssetRepository, MemoryRasterRepository } from "../src/persistence/repository";
 import { assertSupportedProjectSchema, exportProjectBundle, importProjectBundle } from "../src/persistence/archive";
 import { migrateProject, serializeProject } from "../src/persistence/serialization";
-import { validateImageFile } from "../src/security/files";
+import { validateFontFile, validateImageFile } from "../src/security/files";
 
 describe("project persistence", () => {
   it("migrates the MVP shape and removes image sources from project JSON", () => {
@@ -17,7 +17,8 @@ describe("project persistence", () => {
     };
     const project = migrateProject(legacy);
     const json = JSON.stringify(serializeProject(project));
-    expect(project.schemaVersion).toBe(5);
+    expect(project.schemaVersion).toBe(6);
+    expect(project.assets[0]?.kind).toBe("image");
     expect(project.pages[0]?.rasterLayers).toEqual([]);
     expect(project.pages[0]?.elements[0]?.kind).toBe("image");
     expect(project.pages[0]?.elements[0]?.skewX).toBe(0);
@@ -62,9 +63,9 @@ describe("project persistence", () => {
     expect(markerOffset).toBeGreaterThan(-1);
     bytes[markerOffset + marker.length - 1] = "9".charCodeAt(0);
     await expect(importProjectBundle(new Blob([bytes]))).rejects.toThrow("checksum");
-    expect(() => assertSupportedProjectSchema({ schemaVersion: 99, pages: [{}] })).toThrow("รองรับถึง version 5");
+    expect(() => assertSupportedProjectSchema({ schemaVersion: 99, pages: [{}] })).toThrow("รองรับถึง version 6");
     expect(() => assertSupportedProjectSchema({ schemaVersion: "3", pages: [{}] })).toThrow("schemaVersion");
-    expect(() => assertSupportedProjectSchema({ schemaVersion: 5 })).toThrow("ไม่มีหน้ามังงะ");
+    expect(() => assertSupportedProjectSchema({ schemaVersion: 6 })).toThrow("ไม่มีหน้ามังงะ");
   });
 
   it("accepts a real PNG file without relying on its browser MIME value", async () => {
@@ -140,9 +141,24 @@ describe("project persistence", () => {
     project.textStyles.push({ id: "style-1", name: "กระซิบ", kind: "bubble", fontFamily: bubble.fontFamily, fontSize: 28, fontWeight: 700, color: "#17131f", align: "center", lineHeight: 1.3, letterSpacing: 1, writingMode: "horizontal", outlineColor: "#000000", outlineWidth: 1, shadowColor: "#000000", shadowBlur: 2, background: "#ffffff", borderColor: "#17131f", borderWidth: 4 });
     const migrated = migrateProject(serializeProject(project));
     const migratedBubble = migrated.pages[0]!.elements.find((element) => element.id === bubble.id);
-    expect(migrated.schemaVersion).toBe(5);
+    expect(migrated.schemaVersion).toBe(6);
     expect(migratedBubble).toMatchObject({ variant: "whisper", fontFamily: "Noto Sans Thai, sans-serif", autoFit: true });
     expect(migratedBubble?.kind === "bubble" ? migratedBubble.tails : []).toHaveLength(2);
     expect(migrated.textStyles[0]).toMatchObject({ id: "style-1", kind: "bubble", background: "#ffffff" });
+  });
+
+  it("validates and round-trips an embedded font asset", async () => {
+    const fontBytes = Uint8Array.of(0x77, 0x4f, 0x46, 0x32, 0, 0, 0, 0);
+    const fontFile = new File([fontBytes], "MangaThai.woff2", { type: "application/octet-stream" });
+    await expect(validateFontFile(fontFile)).resolves.toBeUndefined();
+    await expect(validateFontFile(new File([Uint8Array.of(0, 0, 0, 0)], "fake.woff2"))).rejects.toThrow("file signature");
+
+    const project = createStarterProject();
+    project.assets.push({ id: "font-1", kind: "font", name: fontFile.name, src: "blob:font-1", mimeType: "font/woff2", byteSize: fontFile.size, width: 0, height: 0, fontFamily: "Cherry MangaThai", createdAt: "2026-08-09T00:00:00.000Z" });
+    const assets = new MemoryAssetRepository();
+    await assets.put("font-1", fontFile);
+    const imported = await importProjectBundle(await exportProjectBundle(project, assets));
+    expect(imported.project.assets.find((asset) => asset.id === "font-1")).toMatchObject({ kind: "font", fontFamily: "Cherry MangaThai" });
+    expect(await imported.assets.get("font-1")?.arrayBuffer()).toEqual(await fontFile.arrayBuffer());
   });
 });
