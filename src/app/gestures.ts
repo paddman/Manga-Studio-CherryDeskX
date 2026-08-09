@@ -128,6 +128,7 @@ function snapDraggedItems(items: DragItem[]): void {
 
 export interface GestureController {
   beginMove(event: PointerEvent, element: MangaElement, node: HTMLElement): void;
+  beginCropDraw(event: PointerEvent, element: ImageElement, node: HTMLElement): void;
   beginCropMove(event: PointerEvent, element: ImageElement, node: HTMLElement): void;
   beginCropResize(event: PointerEvent, element: ImageElement, node: HTMLElement, handle: string): void;
   beginResize(event: PointerEvent, element: MangaElement, node: HTMLElement, handle: string): void;
@@ -138,6 +139,46 @@ export interface GestureController {
 }
 
 export function createGestureController(host: GestureHost): GestureController {
+  const updateCropSelectionNode = (node: HTMLElement, element: ImageElement): void => {
+    const selection = node.querySelector<HTMLElement>(".crop-selection");
+    if (!selection) return;
+    const crop = getCropRect(element);
+    Object.assign(selection.style, {
+      left: `${crop.left * 100}%`,
+      top: `${crop.top * 100}%`,
+      width: `${crop.width * 100}%`,
+      height: `${crop.height * 100}%`,
+    });
+  };
+
+  const beginCropDraw = (event: PointerEvent, element: ImageElement, node: HTMLElement): void => {
+    const releasePointer = capturePointer(event);
+    checkpoint();
+    const position = pagePosition(element);
+    const startPointer = host.pagePoint(event);
+    const startX = clamp((startPointer.x - position.x) / Math.max(1, element.width), 0, 1);
+    const startY = clamp((startPointer.y - position.y) / Math.max(1, element.height), 0, 1);
+    const move = (moveEvent: PointerEvent): void => {
+      const currentPointer = host.pagePoint(moveEvent);
+      const currentX = clamp((currentPointer.x - position.x) / Math.max(1, element.width), 0, 1);
+      const currentY = clamp((currentPointer.y - position.y) / Math.max(1, element.height), 0, 1);
+      const width = Math.max(0.05, Math.abs(currentX - startX));
+      const height = Math.max(0.05, Math.abs(currentY - startY));
+      const left = currentX < startX ? startX - width : startX;
+      const top = currentY < startY ? startY - height : startY;
+      setCropRect(element, { left, top, width, height });
+      updateCropSelectionNode(node, element);
+    };
+    const end = (): void => {
+      window.removeEventListener("pointermove", move);
+      releasePointer();
+      persistProject();
+      host.rerender("เลือกกรอบตัดรูปแล้ว");
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", end, { once: true });
+  };
+
   const beginCropMove = (event: PointerEvent, element: ImageElement, _node: HTMLElement): void => {
     const releasePointer = capturePointer(event);
     checkpoint();
@@ -404,5 +445,5 @@ export function createGestureController(host: GestureHost): GestureController {
     viewport.scrollTop = ratioY * viewport.scrollHeight - viewport.clientHeight / 2;
   };
 
-  return { beginMove, beginCropMove, beginCropResize, beginResize, beginRotate, beginPan, beginCanvasRotation, moveNavigatorTo };
+  return { beginMove, beginCropDraw, beginCropMove, beginCropResize, beginResize, beginRotate, beginPan, beginCanvasRotation, moveNavigatorTo };
 }

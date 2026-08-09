@@ -283,7 +283,23 @@ function renderAssetsPanel(): string {
 }
 
 function renderImageTools(element: ImageElement): string {
-  return `<section class="image-tools" data-image-tools><div class="image-tools-heading"><div><span class="eyebrow">IMAGE TOOLS</span><h3>แก้ไขรูป</h3></div><span class="beta-badge">LOCAL</span></div><div class="image-tools-actions"><button data-action="enter-crop">${runtime.preferences.cropElementId === element.id ? "เสร็จสิ้น Crop" : "เลือกพื้นที่ Crop"}</button><button data-action="replace-image">เปลี่ยนรูป</button><button data-action="reset-image-edits">รีเซ็ต</button></div><label class="field-block"><span>การพอดีกรอบ</span><select data-element-prop="fit">${option("cover", "เต็มกรอบ (Crop)", element.fit)}${option("contain", "เห็นทั้งรูป", element.fit)}${option("stretch", "ยืดอิสระ", element.fit)}</select></label><div class="image-tools-sliders"><label class="field-block"><span>ขาวดำ <output>${element.grayscale}%</output></span><input type="range" data-element-prop="grayscale" value="${element.grayscale}" min="0" max="100" step="1"/></label><label class="field-block"><span>Contrast <output>${element.contrast}%</output></span><input type="range" data-element-prop="contrast" value="${element.contrast}" min="0" max="250" step="1"/></label></div><div class="image-tools-actions"><button data-action="flip-horizontal">กลับซ้าย–ขวา</button><button data-action="flip-vertical">กลับบน–ล่าง</button></div><div class="image-tools-hint">กด “เลือกพื้นที่ Crop” แล้วลากกรอบ/จุดจับ 8 ด้าน • ดับเบิลคลิกเพื่อเข้าโหมดนี้</div></section>`;
+  const cropping = runtime.preferences.cropElementId === element.id;
+  if (cropping) {
+    return `<section class="image-tools crop-workflow-card" data-image-tools><div class="image-tools-heading"><div><span class="eyebrow">CUT & PASTE</span><h3>ตัดรูปแบบง่าย</h3></div><span class="beta-badge">LOCAL</span></div><ol class="crop-workflow-steps"><li>ลากพื้นที่มืดเพื่อวาดกรอบใหม่</li><li>ลากด้านในเพื่อย้าย หรือดึงจุดจับเพื่อปรับ</li><li>เลือกครอปรูปเดิม หรือตัดไปวางเป็นชิ้นใหม่</li></ol>${cropWorkflowButtons()}</section>`;
+  }
+  return `<section class="image-tools" data-image-tools><div class="image-tools-heading"><div><span class="eyebrow">IMAGE TOOLS</span><h3>แก้ไขรูป</h3></div><span class="beta-badge">LOCAL</span></div><button class="simple-crop-launch" data-action="start-crop"><span aria-hidden="true">⌗</span><strong>ตัดและวางรูป</strong><small>ลากเลือกส่วนที่ต้องการ แล้วสร้างเป็นชิ้นใหม่ได้ทันที</small></button><div class="image-tools-actions"><button data-action="replace-image">เปลี่ยนรูป</button><button data-action="reset-image-edits">รีเซ็ต</button></div><label class="field-block"><span>การพอดีกรอบ</span><select data-element-prop="fit">${option("cover", "เต็มกรอบ (Crop)", element.fit)}${option("contain", "เห็นทั้งรูป", element.fit)}${option("stretch", "ยืดอิสระ", element.fit)}</select></label><div class="image-tools-sliders"><label class="field-block"><span>ขาวดำ <output>${element.grayscale}%</output></span><input type="range" data-element-prop="grayscale" value="${element.grayscale}" min="0" max="100" step="1"/></label><label class="field-block"><span>Contrast <output>${element.contrast}%</output></span><input type="range" data-element-prop="contrast" value="${element.contrast}" min="0" max="250" step="1"/></label></div><div class="image-tools-actions"><button data-action="flip-horizontal">กลับซ้าย–ขวา</button><button data-action="flip-vertical">กลับบน–ล่าง</button></div></section>`;
+}
+
+function cropWorkflowButtons(): string {
+  return `<div class="crop-workflow-secondary"><button data-action="reset-crop-selection">เลือกกรอบใหม่</button><button data-action="crop-full-selection">ใช้ทั้งรูป</button><button data-action="cancel-crop">ยกเลิก</button></div><div class="crop-workflow-primary-actions"><button data-action="apply-crop">ครอปรูปเดิม</button><button class="crop-workflow-primary" data-action="paste-crop">ตัดแล้ววางเป็นรูปใหม่</button></div>`;
+}
+
+function renderStageImageToolbar(element: ImageElement): string {
+  if (runtime.preferences.cropElementId !== element.id) {
+    return `<div class="stage-image-toolbar" aria-label="เครื่องมือแต่งรูป"><strong>แก้ไขรูป</strong><button class="stage-crop-launch" data-action="start-crop">ตัดและวางรูป</button><button data-action="replace-image">เปลี่ยนรูป</button><button data-action="reset-image-edits">รีเซ็ต</button></div>`;
+  }
+  const crop = getCropRect(element);
+  return `<div class="crop-workflow-toolbar" role="toolbar" aria-label="ตัดและวางรูป"><div class="crop-workflow-copy"><span>ตัดรูปแบบง่าย</span><strong>ลากกรอบบนรูป แล้วเลือกว่าจะครอปหรือวางเป็นชิ้นใหม่</strong><small>พื้นที่เลือกประมาณ ${Math.round(element.width * crop.width)} × ${Math.round(element.height * crop.height)} px • Enter ครอป • Esc ยกเลิก</small></div>${cropWorkflowButtons()}</div>`;
 }
 
 function renderPanelsPanel(): string {
@@ -375,7 +391,7 @@ function renderStage(): string {
     <section class="stage-column">
       <div class="stage-meta"><div><span class="page-name">${escapeHtml(page.name)}</span><span>${page.width} × ${page.height}px</span><span>Canvas ${Math.round(prefs.canvasRotation)}°</span></div><div class="stage-hint">ลากเพื่อขยับ • ดึงจุดเพื่อย่อ/ขยาย • ปุ่มบนเพื่อหมุน</div></div>
       <div class="stage-viewport ${prefs.tool === "hand" ? "hand-mode" : ""}" data-stage-viewport>
-        ${image ? `<div class="stage-image-toolbar" aria-label="เครื่องมือแต่งรูป"><strong>แก้ไขรูป</strong><button data-action="enter-crop">${prefs.cropElementId === image.id ? "เสร็จสิ้น Crop" : "เลือกพื้นที่ Crop"}</button><button data-action="replace-image">เปลี่ยนรูป</button><button data-action="reset-image-edits">รีเซ็ต</button></div>` : ""}
+        ${image ? renderStageImageToolbar(image) : ""}
         ${ruler ? `<div class="raster-ruler-toolbar"><strong>${ruler.kind === "symmetry" ? "Symmetry Ruler" : "Straight Ruler"}</strong><button data-action="clear-raster-ruler">ปิดไม้บรรทัด</button></div>` : ""}
         <div class="canvas-sizer" style="width:${Math.ceil(rotatedSize.width)}px;height:${Math.ceil(rotatedSize.height)}px">
           <div id="pageCanvas" class="page-canvas ${prefs.showGrid ? "show-grid" : ""}" data-page-canvas style="left:50%;top:50%;width:${page.width}px;height:${page.height}px;background:${page.background};background-size:${Math.max(4, runtime.project.gutter)}px ${Math.max(4, runtime.project.gutter)}px;transform-origin:center;transform:translate(-50%,-50%) rotate(${prefs.canvasRotation}deg) scale(${prefs.zoom})">
@@ -417,7 +433,10 @@ function renderCanvasElement(element: MangaElement, index: number, allElements: 
     const source = element.src || "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='80' height='80'%3E%3Crect width='80' height='80' fill='%23221d2c'/%3E%3Cpath d='M15 65 35 42 48 55 58 44 70 65Z' fill='%23ff4d8d'/%3E%3C/svg%3E";
     const crop = getCropRect(element);
     const hasSelection = crop.left > 0.001 || crop.top > 0.001 || crop.width < 0.999 || crop.height < 0.999;
-    const image = hasSelection
+    const cropping = runtime.preferences.cropElementId === element.id;
+    const image = cropping
+      ? `<div class="crop-source-preview"><img draggable="false" src="${escapeHtml(source)}" alt="${escapeHtml(element.name)}" style="object-fit:fill;border-radius:${element.borderRadius}px;filter:grayscale(${element.grayscale}%) contrast(${element.contrast}%);transform:none"/></div>`
+      : hasSelection
       ? `<div class="image-crop-viewport"><img draggable="false" src="${escapeHtml(source)}" alt="${escapeHtml(element.name)}" style="position:absolute;left:${-(crop.left / crop.width) * 100}%;top:${-(crop.top / crop.height) * 100}%;width:${100 / crop.width}%;height:${100 / crop.height}%;max-width:none;border-radius:${element.borderRadius}px;filter:grayscale(${element.grayscale}%) contrast(${element.contrast}%);transform:none"/></div>`
       : `<img draggable="false" src="${escapeHtml(source)}" alt="${escapeHtml(element.name)}" style="object-fit:${element.fit};object-position:${element.crop.x * 100}% ${element.crop.y * 100}%;border-radius:${element.borderRadius}px;filter:grayscale(${element.grayscale}%) contrast(${element.contrast}%);transform:scale(${element.crop.scale})"/>`;
     content = `${image}${runtime.preferences.cropElementId === element.id ? cropOverlay(element) : ""}`;
@@ -435,7 +454,7 @@ function renderCanvasElement(element: MangaElement, index: number, allElements: 
     const fontSize = element.autoFit ? fittedFontSize({ ...element, height: textHeight, padding }) : element.fontSize;
     content = `${tailSvg}<div class="bubble-shape bubble-${element.variant}" style="--bubble-bg:${element.background};--bubble-color:${element.color};--bubble-border:${element.borderColor};--bubble-border-width:${element.borderWidth}px"><div style="font-size:${fontSize}px;font-weight:${element.fontWeight};font-family:${escapeHtml(element.fontFamily)};text-align:${element.align};line-height:${element.lineHeight};letter-spacing:${element.letterSpacing}px;writing-mode:${element.writingMode === "vertical" ? "vertical-rl" : "horizontal-tb"};-webkit-text-stroke:${element.outlineWidth}px ${element.outlineColor};text-shadow:0 2px ${element.shadowBlur}px ${element.shadowColor}">${escapeHtml(element.text).replaceAll("\n", "<br>")}</div></div>`;
   }
-  return `<div class="${classes} ${runtime.preferences.cropElementId === element.id ? "is-crop-mode" : ""}" data-element-id="${escapeHtml(element.id)}" data-kind="${element.kind}" style="${style}">${content}${selected && !runtime.preferences.preview ? transformHandles() : ""}${element.locked ? `<span class="locked-badge">${icon("lock")}</span>` : ""}</div>`;
+  return `<div class="${classes} ${runtime.preferences.cropElementId === element.id ? "is-crop-mode" : ""}" data-element-id="${escapeHtml(element.id)}" data-kind="${element.kind}" style="${style}">${content}${selected && !runtime.preferences.preview && runtime.preferences.cropElementId !== element.id ? transformHandles() : ""}${element.locked ? `<span class="locked-badge">${icon("lock")}</span>` : ""}</div>`;
 }
 
 function cropOverlay(element: ImageElement): string {
@@ -443,7 +462,7 @@ function cropOverlay(element: ImageElement): string {
   const handles = ["nw", "n", "ne", "e", "se", "s", "sw", "w"]
     .map((handle) => `<button type="button" class="crop-handle crop-handle-${handle}" data-crop-resize="${handle}" aria-label="ปรับขอบ Crop ${handle}"></button>`)
     .join("");
-  return `<div class="crop-overlay"><div class="crop-selection" data-crop-move style="left:${crop.left * 100}%;top:${crop.top * 100}%;width:${crop.width * 100}%;height:${crop.height * 100}%"><span class="crop-grid"></span>${handles}<span class="crop-label">ลากกรอบเพื่อเลือกพื้นที่</span></div></div>`;
+  return `<div class="crop-overlay" data-crop-draw aria-label="ลากเพื่อวาดกรอบตัดรูปใหม่"><div class="crop-selection" data-crop-move style="left:${crop.left * 100}%;top:${crop.top * 100}%;width:${crop.width * 100}%;height:${crop.height * 100}%"><span class="crop-grid"></span>${handles}<span class="crop-label">ลากด้านในเพื่อย้าย • ดึงจุดเพื่อปรับขนาด</span></div><span class="crop-draw-hint">ลากพื้นที่มืดเพื่อวาดกรอบใหม่</span></div>`;
 }
 
 function transformHandles(): string {
@@ -515,7 +534,8 @@ function panelInspector(element: PanelElement): string {
 
 function imageInspector(element: ImageElement): string {
   const parent = element.parentId ? activePage().elements.find((candidate) => candidate.id === element.parentId) : null;
-  return `<div class="section-label">การแสดงรูป</div><label class="field-block"><span>การพอดีกรอบ</span><select data-element-prop="fit">${option("cover", "เต็มกรอบ (Crop)", element.fit)}${option("contain", "เห็นทั้งรูป", element.fit)}${option("stretch", "ยืดอิสระ", element.fit)}</select></label><div class="field-row two-columns">${fieldNumber("ขาวดำ %", "grayscale", element.grayscale, 0, 100)}${fieldNumber("Contrast %", "contrast", element.contrast, 0, 250)}</div>${fieldNumber("มุมโค้ง", "borderRadius", element.borderRadius, 0, 300)}<div class="section-label">ตำแหน่ง Crop</div><div class="field-row three-columns">${fieldNumber("X", "crop-x", Math.round(element.crop.x * 100), 0, 100)}${fieldNumber("Y", "crop-y", Math.round(element.crop.y * 100), 0, 100)}${fieldNumber("Zoom", "crop-scale", element.crop.scale, 1, 5, 0.05)}</div><div class="inspector-actions-grid"><button data-action="enter-crop">${runtime.preferences.cropElementId === element.id ? "เสร็จสิ้น Crop" : "เลือกพื้นที่ Crop"}</button>${parent ? `<button data-action="detach-image">นำรูปออกจากช่อง</button>` : `<button data-action="attach-image" disabled title="ลากรูปเข้าไปในช่องก่อน">ผูกกับช่อง</button>`}</div><button class="wide-action subtle" data-action="replace-image">เปลี่ยนรูปนี้</button>`;
+  const cropAction = runtime.preferences.cropElementId === element.id ? cropWorkflowButtons() : `<button class="wide-action simple-crop-inspector" data-action="start-crop">⌗ ตัดและวางรูป</button>`;
+  return `<div class="section-label">ตัดรูป</div>${cropAction}<div class="section-label">การแสดงรูป</div><label class="field-block"><span>การพอดีกรอบ</span><select data-element-prop="fit">${option("cover", "เต็มกรอบ (Crop)", element.fit)}${option("contain", "เห็นทั้งรูป", element.fit)}${option("stretch", "ยืดอิสระ", element.fit)}</select></label><div class="field-row two-columns">${fieldNumber("ขาวดำ %", "grayscale", element.grayscale, 0, 100)}${fieldNumber("Contrast %", "contrast", element.contrast, 0, 250)}</div>${fieldNumber("มุมโค้ง", "borderRadius", element.borderRadius, 0, 300)}<div class="inspector-actions-grid">${parent ? `<button data-action="detach-image">นำรูปออกจากช่อง</button>` : `<button data-action="attach-image" disabled title="ลากรูปเข้าไปในช่องก่อน">ผูกกับช่อง</button>`}<button data-action="replace-image">เปลี่ยนรูปนี้</button></div>`;
 }
 
 function textInspector(element: TextElement): string {

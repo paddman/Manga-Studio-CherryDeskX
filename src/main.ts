@@ -26,13 +26,16 @@ import {
   duplicateSelected,
   flipSelected,
   groupSelected,
+  getCropRect,
   handleUploads,
   moveLayer,
   pasteElements,
+  pasteCroppedSelectionAsImage,
   removeOrphanAssets,
   resetImageEdits,
   setPageProperty,
   setProjectProperty,
+  setCropRect,
   setCropValue,
   setHierarchyName,
   setSelectedProperty,
@@ -75,7 +78,7 @@ import { addBubbleTail, applyEmbeddedFont, applyTextStylePreset, removeBubbleTai
 import { handleFontUploads, registerProjectFonts, removeEmbeddedFont } from "./editor/font-assets";
 import { handleEditorKeydown } from "./editor/keyboard";
 import { createGestureController, pagePosition } from "./app/gestures";
-import type { BubbleVariant, ExportFormat, ExportScaleMode, ExportScope, LeftTab, PagePreset, PixelSelectionShape, RasterPoint, RasterStroke, TextAlign, Tool } from "./types";
+import type { BubbleVariant, ExportFormat, ExportScaleMode, ExportScope, ImageElement, LeftTab, PagePreset, PixelSelectionShape, RasterPoint, RasterStroke, TextAlign, Tool } from "./types";
 import { contentAwareFillPixels, contentAwareSelectionArea, MAX_LOCAL_CONTENT_AWARE_PIXELS } from "./editor/content-aware";
 
 const root = document.querySelector<HTMLDivElement>("#app");
@@ -216,7 +219,7 @@ function pagePoint(event: PointerEvent): RasterPoint {
     : clientToRotatedPagePoint(event, bounds, page, runtime.preferences.canvasRotation);
 }
 
-const { beginMove, beginCropMove, beginCropResize, beginResize, beginRotate, beginPan, beginCanvasRotation, moveNavigatorTo } = createGestureController({ pagePoint, render, rerender });
+const { beginMove, beginCropDraw, beginCropMove, beginCropResize, beginResize, beginRotate, beginPan, beginCanvasRotation, moveNavigatorTo } = createGestureController({ pagePoint, render, rerender });
 
 function selectionModeForTool(tool: Tool): PixelSelectionShape["mode"] | null {
   return selectionModeForToolId(tool as string);
@@ -409,11 +412,7 @@ function applyCanvasTool(event: PointerEvent, tool: Tool): boolean {
   }
   if (id === "crop") {
     const image = selectedElement();
-    if (image?.kind === "image") {
-      runtime.preferences.cropElementId = image.id;
-      savePreferences();
-      render();
-    } else showToast("เลือกภาพก่อนใช้ Crop Tool", "default");
+    startCropWorkflow(image?.kind === "image" ? image : null);
     return true;
   }
   if (id === "text" || id === "horizontal-type" || id === "vertical-type" || id === "text-box") {
@@ -606,6 +605,106 @@ function runMutation(action: () => void, message: string): void {
   rerender(message);
 }
 
+function cropWorkflowElement(): ImageElement | null {
+  const id = runtime.preferences.cropElementId;
+  if (!id) return null;
+  const element = activePage().elements.find((candidate) => candidate.id === id);
+  return element?.kind === "image" ? element : null;
+}
+
+function closeCropWorkflow(): void {
+  runtime.preferences.cropElementId = null;
+  runtime.preferences.tool = toolId("select");
+  runtime.cropSession = null;
+  savePreferences();
+}
+
+function startCropWorkflow(image: ImageElement | null): void {
+  if (!image) {
+    showToast("เลือกรูปก่อน แล้วกด ‘ตัดและวางรูป’", "default");
+    return;
+  }
+  const previousSession = runtime.cropSession;
+  if (previousSession && previousSession.elementId !== image.id) {
+    const previous = activePage().elements.find((candidate) => candidate.id === previousSession.elementId);
+    if (previous?.kind === "image") previous.crop = structuredClone(previousSession.original);
+    runtime.historyPast.length = previousSession.historyPastLength;
+    runtime.historyFuture = [...previousSession.historyFuture];
+    persistProject();
+  }
+  runtime.cropSession = {
+    elementId: image.id,
+    original: structuredClone(image.crop),
+    historyPastLength: runtime.historyPast.length,
+    historyFuture: [...runtime.historyFuture],
+  };
+  const crop = getCropRect(image);
+  const isFullImage = crop.left < 0.001 && crop.top < 0.001 && crop.width > 0.999 && crop.height > 0.999;
+  if (isFullImage) transact(() => setCropRect(image, { left: 0.12, top: 0.12, width: 0.76, height: 0.76 }));
+  runtime.preferences.cropElementId = image.id;
+  runtime.preferences.tool = toolId("select");
+  setSelection([image.id]);
+  savePreferences();
+  render();
+  showToast("ลากพื้นที่มืดเพื่อวาดกรอบใหม่ แล้วกดตัดหรือวาง", "default");
+}
+
+function cancelCropWorkflow(): void {
+  const session = runtime.cropSession;
+  const image = cropWorkflowElement();
+  if (session && image?.id === session.elementId) {
+    image.crop = structuredClone(session.original);
+    runtime.historyPast.length = session.historyPastLength;
+    runtime.historyFuture = [...session.historyFuture];
+    persistProject();
+  }
+  closeCropWorkflow();
+  rerender("ยกเลิกการตัดรูปแล้ว", "default");
+}
+
+function applyCropWorkflow(): void {
+  const image = cropWorkflowElement();
+  if (!image) return;
+  const finalCrop = structuredClone(image.crop);
+  const session = runtime.cropSession;
+  if (session?.elementId === image.id) {
+    image.crop = structuredClone(session.original);
+    runtime.historyPast.length = session.historyPastLength;
+    runtime.historyFuture = [...session.historyFuture];
+    transact(() => { image.crop = finalCrop; });
+  } else persistProject();
+  closeCropWorkflow();
+  setSelection([image.id]);
+  rerender("ครอปรูปเดิมแล้ว");
+}
+
+function resetCropSelection(fullImage: boolean): void {
+  const image = cropWorkflowElement();
+  if (!image) return;
+  transact(() => setCropRect(image, fullImage
+    ? { left: 0, top: 0, width: 1, height: 1 }
+    : { left: 0.15, top: 0.15, width: 0.7, height: 0.7 }));
+  rerender(fullImage ? "เลือกทั้งรูปแล้ว" : "เริ่มกรอบใหม่แล้ว", "default");
+}
+
+function pasteCropWorkflow(): void {
+  const image = cropWorkflowElement();
+  if (!image) return;
+  const session = runtime.cropSession;
+  const original = session?.elementId === image.id ? session.original : structuredClone(image.crop);
+  if (session?.elementId === image.id) {
+    runtime.historyPast.length = session.historyPastLength;
+    runtime.historyFuture = [...session.historyFuture];
+  }
+  setSelection([image.id]);
+  const pieceId = pasteCroppedSelectionAsImage(original);
+  closeCropWorkflow();
+  if (pieceId) {
+    setSelection([pieceId]);
+    rerender("ตัดส่วนที่เลือกเป็นรูปใหม่แล้ว — ลากไปวางได้ทันที");
+  }
+}
+
 async function handleAction(action: string): Promise<void> {
   if (action === "undo") {
     if (undoProject()) rerender("ย้อนกลับแล้ว", "default");
@@ -764,15 +863,16 @@ async function handleAction(action: string): Promise<void> {
     return;
   }
   if (action === "detach-image") return runMutation(detachSelectedImage, "นำรูปออกจากช่องแล้ว");
-  if (action === "enter-crop") {
+  if (action === "start-crop") {
     const element = selectedElement();
-    if (element?.kind === "image") {
-      runtime.preferences.cropElementId = runtime.preferences.cropElementId === element.id ? null : element.id;
-      savePreferences();
-      render();
-    }
+    startCropWorkflow(element?.kind === "image" ? element : null);
     return;
   }
+  if (action === "reset-crop-selection") return resetCropSelection(false);
+  if (action === "crop-full-selection") return resetCropSelection(true);
+  if (action === "cancel-crop") return cancelCropWorkflow();
+  if (action === "apply-crop") return applyCropWorkflow();
+  if (action === "paste-crop") return pasteCropWorkflow();
   if (action === "replace-image") {
     const input = document.createElement("input");
     input.type = "file";
@@ -869,6 +969,13 @@ appRoot.addEventListener("click", (event) => {
       if (applyPixelSelectionAsLayerMask()) rerender("สร้าง Mask จาก Selection แล้ว");
       else showToast("เลือก Raster layer และสร้าง Selection ก่อนใช้ Layer Mask", "default");
       return;
+    }
+    if (tool === toolId("crop")) {
+      const image = selectedElement();
+      if (image?.kind === "image") {
+        startCropWorkflow(image);
+        return;
+      }
     }
     runtime.preferences.tool = tool;
     savePreferences();
@@ -1262,6 +1369,19 @@ appRoot.addEventListener("pointerdown", (event) => {
     return;
   }
 
+  const cropSurface = target.closest<HTMLElement>("[data-crop-draw]");
+  if (cropSurface) {
+    event.preventDefault();
+    event.stopPropagation();
+    const node = cropSurface.closest<HTMLElement>("[data-element-id]");
+    const element = node ? activePage().elements.find((item) => item.id === node.dataset.elementId) : null;
+    if (node && element?.kind === "image") {
+      setSelection([element.id]);
+      beginCropDraw(event, element, node);
+    }
+    return;
+  }
+
   const resizeHandle = target.closest<HTMLElement>("[data-resize]");
   if (resizeHandle) {
     event.preventDefault();
@@ -1317,10 +1437,7 @@ appRoot.addEventListener("dblclick", (event) => {
   const element = activePage().elements.find((item) => item.id === node?.dataset.elementId);
   if (!element) return;
   if (element.kind === "image") {
-    runtime.preferences.cropElementId = element.id;
-    setSelection([element.id]);
-    savePreferences();
-    render();
+    startCropWorkflow(element);
     return;
   }
   if (element.kind !== "text" && element.kind !== "bubble") return;
@@ -1354,6 +1471,16 @@ appRoot.addEventListener("dblclick", (event) => {
 window.addEventListener("keydown", (event) => {
   const active = document.activeElement;
   const typing = active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement || active instanceof HTMLSelectElement;
+  if (!typing && runtime.preferences.cropElementId && event.key === "Escape") {
+    event.preventDefault();
+    cancelCropWorkflow();
+    return;
+  }
+  if (!typing && runtime.preferences.cropElementId && event.key === "Enter") {
+    event.preventDefault();
+    applyCropWorkflow();
+    return;
+  }
   handleEditorKeydown(event, typing, {
     undo: () => { undoProject(); rerender(); },
     redo: () => { redoProject(); rerender(); },
@@ -1363,7 +1490,18 @@ window.addEventListener("keydown", (event) => {
     paste: () => { pasteElements(); rerender("วางแล้ว"); },
     group: () => { groupSelected(); rerender("จัดกลุ่มแล้ว"); },
     ungroup: () => { ungroupSelected(); rerender("ยกเลิกกลุ่มแล้ว"); },
-    selectTool: (tool) => { runtime.preferences.tool = tool; savePreferences(); render(); },
+    selectTool: (tool) => {
+      if (tool === toolId("crop")) {
+        const image = selectedElement();
+        if (image?.kind === "image") {
+          startCropWorkflow(image);
+          return;
+        }
+      }
+      runtime.preferences.tool = tool;
+      savePreferences();
+      render();
+    },
     hasSelection: () => selectedElements().length > 0 || activePage().rasterLayers.some((layer) => layer.id === runtime.selectedId),
     deleteSelection: () => { deleteSelected(); rerender("ลบองค์ประกอบแล้ว"); },
     duplicateSelection: () => { duplicateSelected(); rerender("ทำสำเนาแล้ว"); },

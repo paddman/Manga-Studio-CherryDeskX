@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { alignSelected, clamp, distributeSelected, duplicateSelected, getCropRect, groupSelected, resetImageEdits, setCropRect } from "../src/editor/actions";
-import { runtime, selectedElements, setSelection } from "../src/editor/state";
+import { alignSelected, clamp, distributeSelected, duplicateSelected, getCropRect, groupSelected, pasteCroppedSelectionAsImage, resetImageEdits, setCropRect } from "../src/editor/actions";
+import { runtime, selectedElements, setSelection, undoProject } from "../src/editor/state";
 import { createImage, createPanel, createText } from "../src/sample";
 import type { MangaProject } from "../src/types";
 
@@ -79,6 +79,41 @@ describe("editor actions", () => {
     expect(getCropRect(image)).toEqual({ left: 0.2, top: 0.15, width: 0.5, height: 0.6 });
     expect(image.crop.x).toBe(0.45);
     expect(image.crop.y).toBeCloseTo(0.45);
+  });
+
+  it("pastes a cropped region as a movable image and restores the source", () => {
+    const project = testProject();
+    const panel = project.pages[0]!.elements[0]!;
+    panel.x = 70;
+    panel.y = 90;
+    const image = createImage("ต้นฉบับ", "blob:test", 40, 60, 300, 200);
+    image.parentId = panel.id;
+    project.pages[0]!.elements.push(image);
+    runtime.project = project;
+    runtime.historyPast = [];
+    runtime.historyFuture = [];
+    setSelection([image.id]);
+    const originalCrop = structuredClone(image.crop);
+    setCropRect(image, { left: 0.2, top: 0.15, width: 0.5, height: 0.6 });
+
+    const pieceId = pasteCroppedSelectionAsImage(originalCrop);
+    const piece = project.pages[0]!.elements.find((element) => element.id === pieceId);
+
+    expect(piece?.kind).toBe("image");
+    if (piece?.kind !== "image") throw new Error("cropped image missing");
+    expect(piece.name).toContain("ส่วนที่ตัด");
+    expect(piece.width).toBe(150);
+    expect(piece.height).toBe(120);
+    expect(piece.parentId).toBeUndefined();
+    expect(piece.x).toBe(198);
+    expect(piece.y).toBe(208);
+    expect(getCropRect(piece)).toEqual({ left: 0.2, top: 0.15, width: 0.5, height: 0.6 });
+    expect(getCropRect(image)).toEqual({ left: 0, top: 0, width: 1, height: 1 });
+    expect(runtime.selectedId).toBe(piece.id);
+    expect(undoProject()).toBe(true);
+    expect(runtime.project.pages[0]!.elements.some((element) => element.id === piece.id)).toBe(false);
+    const restored = runtime.project.pages[0]!.elements.find((element) => element.id === image.id);
+    expect(restored?.kind === "image" ? getCropRect(restored) : null).toEqual({ left: 0, top: 0, width: 1, height: 1 });
   });
 
   it("duplicates a panel with its clipped image and remaps the parent ID", () => {
