@@ -122,10 +122,13 @@ export function createPanel(
     locked: false,
     hidden: false,
     lockAspect: false,
+    flipX: false,
+    flipY: false,
     background: "#ffffff",
     borderColor: "#131019",
     borderWidth: 8,
     borderRadius: 2,
+    clipChildren: true,
   };
 }
 
@@ -150,11 +153,14 @@ export function createImage(
     locked: false,
     hidden: false,
     lockAspect: true,
+    flipX: false,
+    flipY: false,
     src,
     fit: "cover",
     borderRadius: 0,
     grayscale: 0,
     contrast: 100,
+    crop: { x: 0.5, y: 0.5, scale: 1 },
   };
 }
 
@@ -178,6 +184,8 @@ export function createText(
     locked: false,
     hidden: false,
     lockAspect: false,
+    flipX: false,
+    flipY: false,
     text,
     color: "#17131f",
     fontSize: 34,
@@ -186,6 +194,11 @@ export function createText(
     align: "center",
     lineHeight: 1.25,
     letterSpacing: 0,
+    writingMode: "horizontal",
+    outlineColor: "#000000",
+    outlineWidth: 0,
+    shadowColor: "#000000",
+    shadowBlur: 0,
   };
 }
 
@@ -209,6 +222,8 @@ export function createBubble(
     locked: false,
     hidden: false,
     lockAspect: false,
+    flipX: false,
+    flipY: false,
     text,
     variant: "speech",
     background: "#ffffff",
@@ -220,6 +235,7 @@ export function createBubble(
     align: "center",
     tailX: 72,
     tailY: 114,
+    tails: [{ id: uid("tail"), x: 72, y: 114 }],
   };
 }
 
@@ -229,10 +245,14 @@ export function createStarterProject(): MangaProject {
   const art2 = makeCloseupArt();
   const art3 = makeNullArkArt();
   const assets: MangaAsset[] = [
-    { id: uid("asset"), name: "Cherry at orbit", src: art1, createdAt: now },
-    { id: uid("asset"), name: "Cherry close-up", src: art2, createdAt: now },
-    { id: uid("asset"), name: "NULL ARK", src: art3, createdAt: now },
+    { id: uid("asset"), name: "Cherry at orbit", src: art1, mimeType: "image/svg+xml", byteSize: art1.length, width: 900, height: 650, createdAt: now },
+    { id: uid("asset"), name: "Cherry close-up", src: art2, mimeType: "image/svg+xml", byteSize: art2.length, width: 760, height: 760, createdAt: now },
+    { id: uid("asset"), name: "NULL ARK", src: art3, mimeType: "image/svg+xml", byteSize: art3.length, width: 900, height: 600, createdAt: now },
   ];
+
+  const [asset1, asset2, asset3] = assets;
+  const volumeId = uid("volume");
+  const chapterId = uid("chapter");
 
   const page1: MangaPage = {
     id: uid("page"),
@@ -240,13 +260,17 @@ export function createStarterProject(): MangaProject {
     width: PAGE_WIDTH,
     height: PAGE_HEIGHT,
     background: "#f7f5fb",
+    volumeId,
+    chapterId,
+    order: 0,
+    thumbnailVersion: 1,
     elements: [
       createPanel("ช่องเปิดเรื่อง", 48, 48, 698, 510),
-      createImage("Cherry at orbit", art1, 56, 56, 682, 494),
+      { ...createImage("Cherry at orbit", art1, 56, 56, 682, 494), assetId: asset1?.id },
       createPanel("ช่องสีหน้า", 48, 574, 338, 501),
-      createImage("Cherry close-up", art2, 56, 582, 322, 485),
+      { ...createImage("Cherry close-up", art2, 56, 582, 322, 485), assetId: asset2?.id },
       createPanel("ช่องวัตถุปริศนา", 402, 574, 344, 501),
-      createImage("NULL ARK", art3, 410, 582, 328, 485),
+      { ...createImage("NULL ARK", art3, 410, 582, 328, 485), assetId: asset3?.id },
       createText("เสียงเรียกจากความมืด", 84, 90, 380, 92),
       createBubble("หนึ่งวินาทีก่อน...\nตรงนั้นยังว่างเปล่า", 470, 390, 235, 132),
       createBubble("นั่นมัน...อะไรกัน?", 96, 760, 238, 136),
@@ -265,11 +289,15 @@ export function createStarterProject(): MangaProject {
     width: PAGE_WIDTH,
     height: PAGE_HEIGHT,
     background: "#f7f5fb",
+    volumeId,
+    chapterId,
+    order: 1,
+    thumbnailVersion: 1,
     elements: [
       createPanel("Hero panel", 48, 48, 698, 760),
-      createImage("NULL ARK", art3, 56, 56, 682, 744),
+      { ...createImage("NULL ARK", art3, 56, 56, 682, 744), assetId: asset3?.id },
       createPanel("Reaction panel", 48, 824, 698, 251),
-      createImage("Cherry close-up", art2, 56, 832, 250, 235),
+      { ...createImage("Cherry close-up", art2, 56, 832, 250, 235), assetId: asset2?.id },
       caption,
       createBubble("ไม่มีความร้อน\nไม่มีคลื่นวิทยุ\nไม่มีร่องรอยการเดินทาง", 420, 856, 270, 170),
     ],
@@ -278,8 +306,20 @@ export function createStarterProject(): MangaProject {
   return {
     id: uid("project"),
     name: "NULL ARK — เล่ม 1",
+    schemaVersion: 2,
     readingDirection: "rtl",
+    pagePreset: "manga-b5",
+    dpi: 300,
+    colorMode: "rgb",
+    bleed: 3,
+    trim: 0,
+    safeArea: 30,
+    gutter: 16,
     activePageId: page1.id,
+    activeChapterId: chapterId,
+    activeVolumeId: volumeId,
+    volumes: [{ id: volumeId, name: "เล่ม 1", chapterIds: [chapterId], order: 0 }],
+    chapters: [{ id: chapterId, volumeId, name: "บทที่ 1 — สัญญาณแรก", pageIds: [page1.id, page2.id], order: 0 }],
     pages: [page1, page2],
     assets,
     createdAt: now,
