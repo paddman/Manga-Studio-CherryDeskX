@@ -13,6 +13,7 @@ Open `http://localhost:4173`.
 
 ```bash
 npm install
+npm test
 npm run build
 npm run preview
 ```
@@ -51,9 +52,13 @@ location / {
 }
 ```
 
-## Persistence warning
+## Persistence model
 
-This MVP stores projects and imported image data in `localStorage`. That is suitable for a functional front-end prototype, not durable production storage. Before public production use, connect project JSON to an authenticated API and store image binaries in S3-compatible object storage.
+The editor stores versioned project metadata in IndexedDB and binary assets in a separate IndexedDB object store. `localStorage` is retained only as a metadata fallback for browsers without IndexedDB. Legacy MVP data URLs are migrated to the binary store during initialization. `.cherrymanga` files are portable ZIP archives containing `project.json` and asset binaries.
+
+CherryDeskX HTTP, SSO, Workspace and AI adapters are present as typed contracts but are disabled unless `VITE_ENABLE_CHERRYDESKX_API=true`. The default deployment therefore has an explicit local/offline state and does not claim cloud persistence or AI completion.
+
+Copy `.env.example` to `.env` and set the public, non-secret URLs before enabling an API gateway. Never place access tokens in `VITE_*` variables.
 
 ## Recommended production additions
 
@@ -63,3 +68,4 @@ This MVP stores projects and imported image data in `localStorage`. That is suit
 - Redis queue for export and AI jobs.
 - Antivirus and file-type validation for uploads.
 - Rate limits, tenant quotas and audit logs.
+- Browser smoke coverage for editor render, project migration and archive round-trip.

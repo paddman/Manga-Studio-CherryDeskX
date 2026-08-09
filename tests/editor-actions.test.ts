@@ -1,0 +1,41 @@
+import { describe, expect, it } from "vitest";
+import { alignSelected, clamp, distributeSelected } from "../src/editor/actions";
+import { runtime, selectedElements, setSelection } from "../src/editor/state";
+import { createPanel, createText } from "../src/sample";
+import type { MangaProject } from "../src/types";
+
+function testProject(): MangaProject {
+  const page = {
+    id: "page",
+    name: "หน้า 1",
+    width: 800,
+    height: 1000,
+    background: "#fff",
+    volumeId: "volume",
+    chapterId: "chapter",
+    order: 0,
+    thumbnailVersion: 1,
+    elements: [createPanel("panel", 0, 0, 800, 1000), createText("A", 20, 50, 100, 50), createText("B", 280, 200, 100, 50), createText("C", 600, 350, 100, 50)],
+  };
+  return { id: "project", name: "Test", schemaVersion: 2, readingDirection: "ltr", pagePreset: "custom", dpi: 300, colorMode: "rgb", bleed: 0, trim: 0, safeArea: 30, gutter: 16, activePageId: page.id, activeChapterId: "chapter", activeVolumeId: "volume", volumes: [{ id: "volume", name: "เล่ม 1", chapterIds: ["chapter"], order: 0 }], chapters: [{ id: "chapter", volumeId: "volume", name: "บทที่ 1", pageIds: [page.id], order: 0 }], pages: [page], assets: [], createdAt: "2024-01-01T00:00:00.000Z", updatedAt: "2024-01-01T00:00:00.000Z" };
+}
+
+describe("editor actions", () => {
+  it("clamps values and aligns a multi-selection", () => {
+    expect(clamp(12, 0, 10)).toBe(10);
+    runtime.project = testProject();
+    setSelection(runtime.project.pages[0]!.elements.slice(1).map((element) => element.id));
+    alignSelected("left");
+    const selected = selectedElements();
+    expect(selected.every((element) => element.x === 20)).toBe(true);
+  });
+
+  it("distributes three selected elements by their visual order", () => {
+    runtime.project = testProject();
+    const elements = runtime.project.pages[0]!.elements.slice(1);
+    setSelection(elements.map((element) => element.id));
+    distributeSelected("horizontal");
+    expect(elements[1]!.x).toBeGreaterThan(elements[0]!.x);
+    expect(elements[2]!.x).toBeGreaterThan(elements[1]!.x);
+  });
+});

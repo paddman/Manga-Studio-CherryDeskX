@@ -1,0 +1,122 @@
+import { migrateProject, serializeProject } from "./serialization";
+import type { MangaProject } from "../types";
+import type { AssetRepository } from "./repository";
+
+export interface ImportedProjectBundle {
+  project: MangaProject;
+  assets: Map<string, Blob>;
+}
+
+interface ArchiveEntry {
+  name: string;
+  data: Uint8Array;
+}
+
+function read32(bytes: Uint8Array, offset: number): number {
+  return (bytes[offset] ?? 0) | ((bytes[offset + 1] ?? 0) << 8) | ((bytes[offset + 2] ?? 0) << 16) | ((bytes[offset + 3] ?? 0) << 24);
+}
+
+function read16(bytes: Uint8Array, offset: number): number {
+  return (bytes[offset] ?? 0) | ((bytes[offset + 1] ?? 0) << 8);
+}
+
+function write16(value: number): Uint8Array {
+  return Uint8Array.of(value & 0xff, (value >>> 8) & 0xff);
+}
+
+function write32(value: number): Uint8Array {
+  return Uint8Array.of(value & 0xff, (value >>> 8) & 0xff, (value >>> 16) & 0xff, (value >>> 24) & 0xff);
+}
+
+function join(chunks: Uint8Array[]): Uint8Array {
+  const output = new Uint8Array(chunks.reduce((sum, chunk) => sum + chunk.length, 0));
+  let offset = 0;
+  for (const chunk of chunks) {
+    output.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return output;
+}
+
+function crc32(data: Uint8Array): number {
+  let crc = 0xffffffff;
+  for (const value of data) {
+    crc ^= value;
+    for (let bit = 0; bit < 8; bit += 1) crc = (crc >>> 1) ^ (0xedb88320 & -(crc & 1));
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+function zipStore(entries: ArchiveEntry[]): Blob {
+  const encoder = new TextEncoder();
+  const local: Uint8Array[] = [];
+  const central: Uint8Array[] = [];
+  let offset = 0;
+  for (const entry of entries) {
+    const name = encoder.encode(entry.name);
+    const checksum = crc32(entry.data);
+    const localFile = join([Uint8Array.of(0x50, 0x4b, 0x03, 0x04), write16(20), write16(0), write16(0), write16(0), write16(0), write32(checksum), write32(entry.data.length), write32(entry.data.length), write16(name.length), write16(0), name, entry.data]);
+    local.push(localFile);
+    central.push(join([Uint8Array.of(0x50, 0x4b, 0x01, 0x02), write16(20), write16(20), write16(0), write16(0), write16(0), write16(0), write32(checksum), write32(entry.data.length), write32(entry.data.length), write16(name.length), write16(0), write16(0), write16(0), write16(0), write32(0), write32(offset), name]));
+    offset += localFile.length;
+  }
+  const localBytes = join(local);
+  const centralBytes = join(central);
+  const end = join([Uint8Array.of(0x50, 0x4b, 0x05, 0x06), write16(0), write16(0), write16(entries.length), write16(entries.length), write32(centralBytes.length), write32(localBytes.length), write16(0)]);
+  return new Blob([localBytes, centralBytes, end], { type: "application/octet-stream" });
+}
+
+export async function exportProjectBundle(project: MangaProject, assets: AssetRepository): Promise<Blob> {
+  const entries: ArchiveEntry[] = [{ name: "project.json", data: new TextEncoder().encode(JSON.stringify(serializeProject(project), null, 2)) }];
+  for (const asset of project.assets) {
+    const blob = await assets.get(asset.id);
+    if (!blob) continue;
+    entries.push({ name: `assets/${asset.id}`, data: new Uint8Array(await blob.arrayBuffer()) });
+  }
+  return zipStore(entries);
+}
+
+function findEndOfCentralDirectory(bytes: Uint8Array): number {
+  for (let offset = bytes.length - 22; offset >= Math.max(0, bytes.length - 65557); offset -= 1) {
+    if (read32(bytes, offset) === 0x06054b50) return offset;
+  }
+  return -1;
+}
+
+export async function importProjectBundle(file: Blob): Promise<ImportedProjectBundle> {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const endOffset = findEndOfCentralDirectory(bytes);
+  if (endOffset < 0) throw new Error("ไฟล์ .cherrymanga ไม่ใช่ ZIP ที่ถูกต้อง");
+  const count = read16(bytes, endOffset + 10);
+  const centralSize = read32(bytes, endOffset + 12);
+  const centralOffset = read32(bytes, endOffset + 16);
+  if (centralOffset + centralSize > bytes.length) throw new Error("ไฟล์โปรเจกต์เสียหาย");
+  const decoder = new TextDecoder();
+  const files = new Map<string, Uint8Array>();
+  let offset = centralOffset;
+  for (let index = 0; index < count; index += 1) {
+    if (read32(bytes, offset) !== 0x02014b50) throw new Error("ตารางไฟล์ใน archive เสียหาย");
+    const compressedSize = read32(bytes, offset + 20);
+    const method = read16(bytes, offset + 10);
+    const nameLength = read16(bytes, offset + 28);
+    const extraLength = read16(bytes, offset + 30);
+    const commentLength = read16(bytes, offset + 32);
+    const localOffset = read32(bytes, offset + 42);
+    const name = decoder.decode(bytes.slice(offset + 46, offset + 46 + nameLength));
+    if (method !== 0) throw new Error("ไฟล์นี้ใช้ compression ที่ยังไม่รองรับ");
+    const localNameLength = read16(bytes, localOffset + 26);
+    const localExtraLength = read16(bytes, localOffset + 28);
+    const dataStart = localOffset + 30 + localNameLength + localExtraLength;
+    files.set(name, bytes.slice(dataStart, dataStart + compressedSize));
+    offset += 46 + nameLength + extraLength + commentLength;
+  }
+  const projectData = files.get("project.json");
+  if (!projectData) throw new Error("ไม่พบ project.json ในไฟล์ .cherrymanga");
+  const project = migrateProject(JSON.parse(decoder.decode(projectData)) as unknown);
+  const assets = new Map<string, Blob>();
+  for (const asset of project.assets) {
+    const data = files.get(`assets/${asset.id}`);
+    if (data) assets.set(asset.id, new Blob([data], { type: asset.mimeType }));
+  }
+  return { project, assets };
+}
