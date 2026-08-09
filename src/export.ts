@@ -5,7 +5,20 @@ import type {
   MangaPage,
   TextAlign,
   TextElement,
+  MangaProject,
 } from "./types";
+
+export type ExportFormat = "png" | "jpg" | "pdf" | "cbz" | "zip" | "webtoon";
+export type ExportScope = "page" | "chapter" | "volume" | "project";
+
+export interface ExportOptions {
+  format: ExportFormat;
+  scope?: ExportScope;
+  scale?: number;
+  maxWebtoonHeight?: number;
+  signal?: AbortSignal;
+  onProgress?: (completed: number, total: number) => void;
+}
 
 function loadImage(src: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
@@ -44,8 +57,30 @@ function drawFittedImage(
   element: ImageElement,
 ): void {
   const { width, height, fit } = element;
+  const crop = element.crop;
+  const cropLeft = crop.left ?? 0;
+  const cropTop = crop.top ?? 0;
+  const cropWidth = crop.width ?? 1;
+  const cropHeight = crop.height ?? 1;
+  const hasSelection = cropLeft > 0.001 || cropTop > 0.001 || cropWidth < 0.999 || cropHeight < 0.999;
+  if (hasSelection) {
+    ctx.drawImage(
+      image,
+      image.naturalWidth * cropLeft,
+      image.naturalHeight * cropTop,
+      image.naturalWidth * cropWidth,
+      image.naturalHeight * cropHeight,
+      0,
+      0,
+      width,
+      height,
+    );
+    return;
+  }
   if (fit === "stretch") {
-    ctx.drawImage(image, 0, 0, width, height);
+    const scaledWidth = width * element.crop.scale;
+    const scaledHeight = height * element.crop.scale;
+    ctx.drawImage(image, (width - scaledWidth) * element.crop.x, (height - scaledHeight) * element.crop.y, scaledWidth, scaledHeight);
     return;
   }
 
@@ -66,7 +101,11 @@ function drawFittedImage(
     y = (height - drawHeight) / 2;
   }
 
-  ctx.drawImage(image, x, y, drawWidth, drawHeight);
+  const scaledWidth = drawWidth * element.crop.scale;
+  const scaledHeight = drawHeight * element.crop.scale;
+  const cropX = (width - scaledWidth) * element.crop.x;
+  const cropY = (height - scaledHeight) * element.crop.y;
+  ctx.drawImage(image, x + cropX, y + cropY, scaledWidth, scaledHeight);
 }
 
 function segmentText(text: string): string[] {
@@ -249,13 +288,27 @@ function drawBubbleElement(ctx: CanvasRenderingContext2D, element: BubbleElement
   });
 }
 
-async function drawElement(ctx: CanvasRenderingContext2D, element: MangaElement): Promise<void> {
+async function drawElement(ctx: CanvasRenderingContext2D, element: MangaElement, page: MangaPage): Promise<void> {
   if (element.hidden) return;
+
+  if (element.parentId && element.kind !== "image") return;
+  if (element.kind === "image" && element.parentId) {
+    const panel = page.elements.find((candidate) => candidate.id === element.parentId && candidate.kind === "panel");
+    if (!panel || panel.kind !== "panel") return;
+    ctx.save();
+    roundedRect(ctx, panel.x, panel.y, panel.width, panel.height, panel.borderRadius);
+    ctx.clip();
+    ctx.translate(panel.x, panel.y);
+    await drawElement(ctx, { ...element, parentId: undefined }, page);
+    ctx.restore();
+    return;
+  }
 
   ctx.save();
   ctx.globalAlpha = element.opacity;
   ctx.translate(element.x + element.width / 2, element.y + element.height / 2);
   ctx.rotate((element.rotation * Math.PI) / 180);
+  ctx.scale(element.flipX ? -1 : 1, element.flipY ? -1 : 1);
   ctx.translate(-element.width / 2, -element.height / 2);
 
   if (element.kind === "panel") {
@@ -267,6 +320,13 @@ async function drawElement(ctx: CanvasRenderingContext2D, element: MangaElement)
       ctx.lineWidth = element.borderWidth;
       ctx.stroke();
     }
+    ctx.save();
+    roundedRect(ctx, 0, 0, element.width, element.height, element.borderRadius);
+    ctx.clip();
+    for (const child of page.elements.filter((candidate) => candidate.parentId === element.id)) {
+      await drawElement(ctx, { ...child, parentId: undefined }, page);
+    }
+    ctx.restore();
   }
 
   if (element.kind === "image") {
@@ -283,7 +343,7 @@ async function drawElement(ctx: CanvasRenderingContext2D, element: MangaElement)
   ctx.restore();
 }
 
-export async function exportPagePng(page: MangaPage, filename: string, scale = 2): Promise<void> {
+export async function renderPageBlob(page: MangaPage, scale = 2, mimeType: "image/png" | "image/jpeg" = "image/png", signal?: AbortSignal): Promise<Blob> {
   const canvas = document.createElement("canvas");
   canvas.width = Math.round(page.width * scale);
   canvas.height = Math.round(page.height * scale);
@@ -295,27 +355,228 @@ export async function exportPagePng(page: MangaPage, filename: string, scale = 2
   ctx.fillRect(0, 0, page.width, page.height);
 
   for (const element of page.elements) {
-    await drawElement(ctx, element);
+    if (element.parentId) continue;
+    if (signal?.aborted) throw new DOMException("Export cancelled", "AbortError");
+    await drawElement(ctx, element, page);
   }
 
-  const blob = await new Promise<Blob>((resolve, reject) => {
+  return new Promise<Blob>((resolve, reject) => {
     canvas.toBlob((result) => {
       if (result) resolve(result);
-      else reject(new Error("สร้างไฟล์ PNG ไม่สำเร็จ"));
-    }, "image/png");
+      else reject(new Error(`สร้างไฟล์ ${mimeType === "image/png" ? "PNG" : "JPG"} ไม่สำเร็จ`));
+    }, mimeType, mimeType === "image/jpeg" ? 0.92 : undefined);
   });
+}
 
-  const safeName = filename
+function safeFilename(filename: string): string {
+  return filename
     .normalize("NFKD")
     .replace(/[^\p{L}\p{N}_-]+/gu, "-")
     .replace(/^-+|-+$/g, "")
-    .slice(0, 80);
+    .slice(0, 80) || "manga-export";
+}
+
+export function downloadBlobFile(blob: Blob, filename: string): void {
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
   anchor.href = url;
-  anchor.download = `${safeName || "manga-page"}.png`;
+  anchor.download = filename;
   document.body.append(anchor);
   anchor.click();
   anchor.remove();
   window.setTimeout(() => URL.revokeObjectURL(url), 5000);
+}
+
+export async function exportPagePng(page: MangaPage, filename: string, scale = 2): Promise<void> {
+  const blob = await renderPageBlob(page, scale, "image/png");
+  downloadBlobFile(blob, `${safeFilename(filename)}.png`);
+}
+
+interface ArchiveEntry {
+  name: string;
+  data: Uint8Array;
+}
+
+function crc32(data: Uint8Array): number {
+  let crc = 0xffffffff;
+  for (const value of data) {
+    crc ^= value;
+    for (let bit = 0; bit < 8; bit += 1) crc = (crc >>> 1) ^ (0xedb88320 & -(crc & 1));
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+function writeUint16(value: number): Uint8Array {
+  return Uint8Array.of(value & 0xff, (value >>> 8) & 0xff);
+}
+
+function writeUint32(value: number): Uint8Array {
+  return Uint8Array.of(value & 0xff, (value >>> 8) & 0xff, (value >>> 16) & 0xff, (value >>> 24) & 0xff);
+}
+
+function concatBytes(chunks: Uint8Array[]): Uint8Array {
+  const size = chunks.reduce((total, chunk) => total + chunk.length, 0);
+  const result = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    result.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return result;
+}
+
+function zipStore(entries: ArchiveEntry[]): Blob {
+  const encoder = new TextEncoder();
+  const local: Uint8Array[] = [];
+  const central: Uint8Array[] = [];
+  let offset = 0;
+  for (const entry of entries) {
+    const name = encoder.encode(entry.name);
+    const checksum = crc32(entry.data);
+    const header = concatBytes([
+      Uint8Array.of(0x50, 0x4b, 0x03, 0x04),
+      writeUint16(20), writeUint16(0), writeUint16(0), writeUint16(0), writeUint16(0),
+      writeUint32(checksum), writeUint32(entry.data.length), writeUint32(entry.data.length),
+      writeUint16(name.length), writeUint16(0), name, entry.data,
+    ]);
+    local.push(header);
+    const centralHeader = concatBytes([
+      Uint8Array.of(0x50, 0x4b, 0x01, 0x02),
+      writeUint16(20), writeUint16(20), writeUint16(0), writeUint16(0), writeUint16(0), writeUint16(0),
+      writeUint32(checksum), writeUint32(entry.data.length), writeUint32(entry.data.length),
+      writeUint16(name.length), writeUint16(0), writeUint16(0), writeUint16(0), writeUint16(0), writeUint32(0), writeUint32(offset), name,
+    ]);
+    central.push(centralHeader);
+    offset += header.length;
+  }
+  const centralData = concatBytes(central);
+  const localData = concatBytes(local);
+  const end = concatBytes([
+    Uint8Array.of(0x50, 0x4b, 0x05, 0x06), writeUint16(0), writeUint16(0), writeUint16(entries.length), writeUint16(entries.length), writeUint32(centralData.length), writeUint32(localData.length), writeUint16(0),
+  ]);
+  return new Blob([localData, centralData, end], { type: "application/zip" });
+}
+
+function ascii(value: string): Uint8Array {
+  return new TextEncoder().encode(value);
+}
+
+async function createPdf(pages: Array<{ page: MangaPage; blob: Blob; width: number; height: number }>): Promise<Blob> {
+  const objects: Uint8Array[] = [];
+  const pageReferences: number[] = [];
+  const pagesObject = 2;
+  objects.push(ascii("<< /Type /Catalog /Pages 2 0 R >>"));
+  objects.push(new Uint8Array());
+  for (const item of pages) {
+    const image = new Uint8Array(await item.blob.arrayBuffer());
+    const pageObject = objects.length + 1;
+    const contentObject = pageObject + 1;
+    const imageObject = pageObject + 2;
+    pageReferences.push(pageObject);
+    const pdfWidth = Math.round(item.page.width * 72 / 96);
+    const pdfHeight = Math.round(item.page.height * 72 / 96);
+    objects.push(ascii(`<< /Type /Page /Parent ${pagesObject} 0 R /MediaBox [0 0 ${pdfWidth} ${pdfHeight}] /Resources << /XObject << /Im0 ${imageObject} 0 R >> >> /Contents ${contentObject} 0 R >>`));
+    const stream = `q ${pdfWidth} 0 0 ${pdfHeight} 0 0 cm /Im0 Do Q`;
+    objects.push(ascii(`<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`));
+    objects.push(concatBytes([ascii(`<< /Type /XObject /Subtype /Image /Width ${item.width} /Height ${item.height} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${image.length} >>\nstream\n`), image, ascii("\nendstream")]));
+  }
+  objects[1] = ascii(`<< /Type /Pages /Kids [${pageReferences.map((reference) => `${reference} 0 R`).join(" ")}] /Count ${pageReferences.length} >>`);
+  const chunks: Uint8Array[] = [ascii("%PDF-1.4\n%\xe2\xe3\xcf\xd3\n")];
+  const offsets: number[] = [0];
+  let cursor = chunks[0]!.length;
+  objects.forEach((object, index) => {
+    offsets[index + 1] = cursor;
+    const wrapped = concatBytes([ascii(`${index + 1} 0 obj\n`), object, ascii("\nendobj\n")]);
+    chunks.push(wrapped);
+    cursor += wrapped.length;
+  });
+  const xrefOffset = cursor;
+  const xref = [`xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`, ...offsets.slice(1).map((offset) => `${String(offset).padStart(10, "0")} 00000 n \n`)].join("");
+  chunks.push(ascii(`${xref}trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF`));
+  return new Blob(chunks, { type: "application/pdf" });
+}
+
+function pagesForScope(project: MangaProject, scope: ExportScope): MangaPage[] {
+  if (scope === "page") return [project.pages.find((page) => page.id === project.activePageId) ?? project.pages[0]!];
+  if (scope === "chapter") {
+    const chapter = project.chapters.find((item) => item.id === project.activeChapterId);
+    return project.pages.filter((page) => chapter?.pageIds.includes(page.id));
+  }
+  if (scope === "volume") {
+    const volume = project.volumes.find((item) => item.id === project.activeVolumeId);
+    const chapterIds = new Set(volume?.chapterIds ?? []);
+    return project.pages.filter((page) => chapterIds.has(page.chapterId));
+  }
+  return [...project.pages].sort((a, b) => a.order - b.order);
+}
+
+async function createWebtoonBlobs(pages: Array<{ page: MangaPage; blob: Blob }>, scale: number, maxHeight: number, signal?: AbortSignal): Promise<Blob[]> {
+  const images = await Promise.all(pages.map(async ({ page, blob }) => ({ page, image: await loadImage(URL.createObjectURL(blob)) })));
+  const results: Blob[] = [];
+  let current = document.createElement("canvas");
+  current.width = Math.max(...images.map((item) => Math.round(item.page.width * scale)));
+  current.height = maxHeight;
+  let ctx = current.getContext("2d");
+  if (!ctx) throw new Error("เบราว์เซอร์ไม่รองรับ Canvas 2D");
+  let y = 0;
+  for (const item of images) {
+    if (signal?.aborted) throw new DOMException("Export cancelled", "AbortError");
+    const height = Math.round(item.page.height * scale);
+    if (y > 0 && y + height > maxHeight) {
+      const blob = await canvasToPng(current, y);
+      results.push(blob);
+      current = document.createElement("canvas");
+      current.width = Math.max(...images.map((candidate) => Math.round(candidate.page.width * scale)));
+      current.height = maxHeight;
+      ctx = current.getContext("2d");
+      if (!ctx) throw new Error("เบราว์เซอร์ไม่รองรับ Canvas 2D");
+      y = 0;
+    }
+    ctx.drawImage(item.image, 0, y, Math.round(item.page.width * scale), height);
+    y += height;
+  }
+  if (y > 0) results.push(await canvasToPng(current, y));
+  return results;
+}
+
+async function canvasToPng(canvas: HTMLCanvasElement, height: number): Promise<Blob> {
+  const cropped = document.createElement("canvas");
+  cropped.width = canvas.width;
+  cropped.height = height;
+  cropped.getContext("2d")?.drawImage(canvas, 0, 0);
+  return new Promise<Blob>((resolve, reject) => {
+    cropped.toBlob((blob) => blob ? resolve(blob) : reject(new Error("สร้าง Webtoon PNG ไม่สำเร็จ")), "image/png");
+  });
+}
+
+export async function exportProject(project: MangaProject, filename: string, options: ExportOptions): Promise<void> {
+  const pages = pagesForScope(project, options.scope ?? "page");
+  const scale = Math.max(0.25, options.scale ?? 2);
+  const total = pages.length;
+  const rendered: Array<{ page: MangaPage; blob: Blob }> = [];
+  for (const [index, page] of pages.entries()) {
+    if (options.signal?.aborted) throw new DOMException("Export cancelled", "AbortError");
+    const blob = await renderPageBlob(page, scale, options.format === "jpg" || options.format === "pdf" ? "image/jpeg" : "image/png", options.signal);
+    rendered.push({ page, blob });
+    options.onProgress?.(index + 1, total);
+  }
+  const base = safeFilename(filename);
+  if (options.format === "png" || options.format === "jpg") {
+    if (rendered.length === 1) downloadBlobFile(rendered[0]!.blob, `${base}.${options.format}`);
+    else downloadBlobFile(zipStore(await Promise.all(rendered.map(async ({ page, blob }, index) => ({ name: `${String(index + 1).padStart(3, "0")}-${safeFilename(page.name)}.${options.format}`, data: new Uint8Array(await blob.arrayBuffer()) })))), `${base}.zip`);
+    return;
+  }
+  if (options.format === "webtoon") {
+    const blobs = await createWebtoonBlobs(rendered, scale, options.maxWebtoonHeight ?? 8000, options.signal);
+    downloadBlobFile(zipStore(await Promise.all(blobs.map(async (blob, index) => ({ name: `${base}-${String(index + 1).padStart(2, "0")}.png`, data: new Uint8Array(await blob.arrayBuffer()) })))), `${base}-webtoon.zip`);
+    return;
+  }
+  if (options.format === "pdf") {
+    const pdf = await createPdf(rendered.map(({ page, blob }) => ({ page, blob, width: Math.round(page.width * scale), height: Math.round(page.height * scale) })));
+    downloadBlobFile(pdf, `${base}.pdf`);
+    return;
+  }
+  const entries = await Promise.all(rendered.map(async ({ page, blob }, index) => ({ name: `pages/${String(index + 1).padStart(3, "0")}-${safeFilename(page.name)}.png`, data: new Uint8Array(await blob.arrayBuffer()) })));
+  entries.unshift({ name: "project.json", data: ascii(JSON.stringify({ id: project.id, name: project.name, schemaVersion: project.schemaVersion, pageIds: pages.map((page) => page.id) }, null, 2)) });
+  downloadBlobFile(zipStore(entries), `${base}.${options.format}`);
 }

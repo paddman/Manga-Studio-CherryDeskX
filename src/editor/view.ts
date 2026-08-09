@@ -8,6 +8,7 @@ import type {
   TextElement,
   ImageElement,
 } from "../types";
+import { getCropRect } from "./actions";
 import { activePage, runtime, selectedElement } from "./state";
 
 function escapeHtml(value: string): string {
@@ -76,7 +77,7 @@ export function renderApp(): string {
         </div>
         <div class="project-title-wrap">
           <input class="project-title-input" data-project-name value="${escapeHtml(runtime.project.name)}" aria-label="ชื่อโปรเจกต์" />
-          <span class="save-status">บันทึกล่าสุด ${formatDate(runtime.project.updatedAt)}</span>
+          <span class="save-status">${saveStatusLabel()}</span>
         </div>
         <div class="topbar-actions">
           <button class="icon-button ${prefs.tool === "select" ? "is-active" : ""}" data-tool="select" title="เลือกและขยับ (V)">${icon("select")}</button>
@@ -90,7 +91,8 @@ export function renderApp(): string {
           <button class="icon-button ${prefs.showSafeArea ? "is-active" : ""}" data-action="toggle-safe" title="Safe area">${icon("safe")}</button>
           <div class="zoom-control"><button data-action="zoom-out">−</button><span>${zoomPercent}%</span><button data-action="zoom-in">+</button></div>
           <button class="secondary-button" data-action="preview">${icon("preview")} ${prefs.preview ? "กลับไปแก้ไข" : "ดูตัวอย่าง"}</button>
-          <button class="primary-button" data-action="export">${icon("export")} ส่งออก PNG</button>
+          <select class="export-format-select" data-export-format aria-label="รูปแบบส่งออก"><option value="png">PNG หน้านี้</option><option value="jpg">JPG หน้านี้</option><option value="pdf">PDF ทั้งบท</option><option value="cbz">CBZ ทั้งบท</option><option value="zip">ZIP ทั้งโปรเจกต์</option><option value="webtoon">Webtoon ยาว</option></select>
+          <button class="primary-button" data-action="export">${icon("export")} ส่งออก</button>
         </div>
       </header>
       <main class="workspace">
@@ -130,6 +132,7 @@ function renderLeftContent(): string {
 }
 
 function renderAssetsPanel(): string {
+  const selected = selectedElement();
   const cards = runtime.project.assets
     .map(
       (asset) => `<button class="asset-card" data-add-asset="${asset.id}" title="เพิ่ม ${escapeHtml(asset.name)} ลงหน้า"><img src="${asset.src}" alt="${escapeHtml(asset.name)}"/><span>${escapeHtml(asset.name)}</span></button>`,
@@ -137,10 +140,17 @@ function renderAssetsPanel(): string {
     .join("");
   return `
     <div class="panel-heading"><div><span class="eyebrow">LIBRARY</span><h2>รูปและองค์ประกอบ</h2></div><span class="count-badge">${runtime.project.assets.length}</span></div>
-    <label class="upload-zone">${icon("plus")}<strong>อัปโหลดรูป</strong><span>PNG, JPG, WEBP หรือ SVG</span><input type="file" data-upload-input accept="image/png,image/jpeg,image/webp,image/svg+xml" multiple hidden/></label>
+    ${selected?.kind === "image" ? renderImageTools(selected) : ""}
+    <button type="button" class="upload-zone" data-action="open-upload">${icon("plus")}<strong>อัปโหลดรูป</strong><span>PNG, JPG, WEBP หรือ SVG</span></button>
+    <input type="file" data-upload-input accept="image/png,image/jpeg,image/webp,image/svg+xml" multiple hidden aria-label="เลือกไฟล์รูป" />
     <div class="asset-grid">${cards}</div>
-    <div class="sidebar-note">รูปที่อัปโหลดจะเก็บในเบราว์เซอร์เครื่องนี้ก่อน ระบบ Cloud Asset Library จะเชื่อมในเฟสถัดไป</div>
+    <button class="wide-action subtle" data-action="remove-orphans" ${runtime.project.assets.length ? "" : "disabled"}>ล้างรูปที่ไม่ได้ใช้</button>
+    <div class="sidebar-note">ไฟล์ binary เก็บใน IndexedDB แยกจาก project JSON แล้ว ระบบ Cloud Asset Library จะแสดงสถานะเชื่อมต่อเมื่อ CherryDeskX API พร้อม</div>
   `;
+}
+
+function renderImageTools(element: ImageElement): string {
+  return `<section class="image-tools" data-image-tools><div class="image-tools-heading"><div><span class="eyebrow">IMAGE TOOLS</span><h3>แก้ไขรูป</h3></div><span class="beta-badge">LOCAL</span></div><div class="image-tools-actions"><button data-action="enter-crop">${runtime.preferences.cropElementId === element.id ? "เสร็จสิ้น Crop" : "เลือกพื้นที่ Crop"}</button><button data-action="replace-image">เปลี่ยนรูป</button><button data-action="reset-image-edits">รีเซ็ต</button></div><label class="field-block"><span>การพอดีกรอบ</span><select data-element-prop="fit">${option("cover", "เต็มกรอบ (Crop)", element.fit)}${option("contain", "เห็นทั้งรูป", element.fit)}${option("stretch", "ยืดอิสระ", element.fit)}</select></label><div class="image-tools-sliders"><label class="field-block"><span>ขาวดำ <output>${element.grayscale}%</output></span><input type="range" data-element-prop="grayscale" value="${element.grayscale}" min="0" max="100" step="1"/></label><label class="field-block"><span>Contrast <output>${element.contrast}%</output></span><input type="range" data-element-prop="contrast" value="${element.contrast}" min="0" max="250" step="1"/></label></div><div class="image-tools-actions"><button data-action="flip-horizontal">กลับซ้าย–ขวา</button><button data-action="flip-vertical">กลับบน–ล่าง</button></div><div class="image-tools-hint">กด “เลือกพื้นที่ Crop” แล้วลากกรอบ/จุดจับ 8 ด้าน • ดับเบิลคลิกเพื่อเข้าโหมดนี้</div></section>`;
 }
 
 function renderPanelsPanel(): string {
@@ -183,23 +193,32 @@ function renderAiPanel(): string {
   return `
     <div class="panel-heading"><div><span class="eyebrow">CHERRY ASSIST</span><h2>ผู้ช่วยจัดหน้ามังงะ</h2></div><span class="beta-badge">LOCAL</span></div>
     <div class="ai-card ai-hero"><span class="ai-orb">✦</span><div><strong>Smart Layout</strong><p>จัดช่องและวางภาพในหน้าแบบอัตโนมัติจากจำนวนรูปที่มี</p></div><button data-action="smart-layout">จัดหน้าให้ฉัน</button></div>
-    <div class="ai-card"><strong>Script to Page</strong><p>วางบทแล้วสร้าง Draft ช่อง บอลลูน และลำดับอ่าน</p><button disabled>เร็ว ๆ นี้</button></div>
-    <div class="ai-card"><strong>Outpaint / Repair</strong><p>ขยายฉาก ลบวัตถุ และเพิ่มพื้นที่สำหรับบทพูด</p><button disabled>รอ AI backend</button></div>
-    <div class="ai-card"><strong>Character Consistency</strong><p>ล็อกใบหน้า ชุด และลักษณะตัวละครตลอดทั้งตอน</p><button disabled>เร็ว ๆ นี้</button></div>
+    <div class="ai-card"><strong>Script to Page</strong><p>ยังไม่มี AI job backend สำหรับสร้างหน้า จึงปิดการใช้งานไว้</p><button disabled title="ต้องเชื่อม CherryDeskX AI API ก่อน">ยังไม่พร้อม</button></div>
+    <div class="ai-card"><strong>Outpaint / Repair</strong><p>ยังไม่มี service สำหรับส่ง job และตรวจผล จึงไม่แสดงเป็นฟีเจอร์ที่ใช้งานได้</p><button disabled title="ต้องเชื่อม CherryDeskX AI API ก่อน">ยังไม่พร้อม</button></div>
+    <div class="ai-card"><strong>Character Consistency</strong><p>ต้องใช้ AI credits และ human review จาก backend ก่อนเปิดใช้งาน</p><button disabled title="ต้องเชื่อม CherryDeskX AI API ก่อน">ยังไม่พร้อม</button></div>
   `;
 }
 
 function renderStage(): string {
   const page = activePage();
   const prefs = runtime.preferences;
-  const elements = page.elements.map(renderCanvasElement).join("");
+  const selected = selectedElement();
+  const image = selected?.kind === "image" ? selected : null;
+  const elements = page.elements.filter((element) => !element.parentId).map((element, index) => renderCanvasElement(element, index, page.elements)).join("");
+  const guides = runtime.selectionGuides.map((guide) => guide.axis === "x"
+    ? `<div class="dynamic-guide guide-x" style="left:${guide.position}px"><span>${guide.label ?? ""}</span></div>`
+    : `<div class="dynamic-guide guide-y" style="top:${guide.position}px"><span>${guide.label ?? ""}</span></div>`).join("");
+  const rectangle = runtime.selectionRectangle
+    ? `<div class="selection-rectangle" style="left:${runtime.selectionRectangle.x}px;top:${runtime.selectionRectangle.y}px;width:${runtime.selectionRectangle.width}px;height:${runtime.selectionRectangle.height}px"></div>`
+    : "";
   return `
     <section class="stage-column">
       <div class="stage-meta"><div><span class="page-name">${escapeHtml(page.name)}</span><span>${page.width} × ${page.height}px</span></div><div class="stage-hint">ลากเพื่อขยับ • ดึงจุดเพื่อย่อ/ขยาย • ปุ่มบนเพื่อหมุน</div></div>
       <div class="stage-viewport ${prefs.tool === "hand" ? "hand-mode" : ""}" data-stage-viewport>
+        ${image ? `<div class="stage-image-toolbar" aria-label="เครื่องมือแต่งรูป"><strong>แก้ไขรูป</strong><button data-action="enter-crop">${prefs.cropElementId === image.id ? "เสร็จสิ้น Crop" : "เลือกพื้นที่ Crop"}</button><button data-action="replace-image">เปลี่ยนรูป</button><button data-action="reset-image-edits">รีเซ็ต</button></div>` : ""}
         <div class="canvas-sizer" style="width:${Math.round(page.width * prefs.zoom)}px;height:${Math.round(page.height * prefs.zoom)}px">
           <div id="pageCanvas" class="page-canvas ${prefs.showGrid ? "show-grid" : ""}" data-page-canvas style="width:${page.width}px;height:${page.height}px;background:${page.background};transform:scale(${prefs.zoom})">
-            ${prefs.showSafeArea ? `<div class="safe-area"></div>` : ""}${elements}
+            ${prefs.showSafeArea ? `<div class="safe-area"></div>` : ""}${guides}${rectangle}${elements}
           </div>
         </div>
       </div>
@@ -207,8 +226,8 @@ function renderStage(): string {
   `;
 }
 
-function renderCanvasElement(element: MangaElement, index: number): string {
-  const selected = element.id === runtime.selectedId;
+function renderCanvasElement(element: MangaElement, index: number, allElements: MangaElement[]): string {
+  const selected = runtime.selectedIds.includes(element.id) || element.id === runtime.selectedId;
   const classes = [
     "canvas-element",
     `${element.kind}-element`,
@@ -218,15 +237,36 @@ function renderCanvasElement(element: MangaElement, index: number): string {
   ]
     .filter(Boolean)
     .join(" ");
-  const style = `left:${element.x}px;top:${element.y}px;width:${element.width}px;height:${element.height}px;transform:rotate(${element.rotation}deg);opacity:${element.opacity};z-index:${index + 1}`;
+  const scaleX = element.flipX ? -1 : 1;
+  const scaleY = element.flipY ? -1 : 1;
+  const style = `left:${element.x}px;top:${element.y}px;width:${element.width}px;height:${element.height}px;transform:rotate(${element.rotation}deg) scale(${scaleX},${scaleY});opacity:${element.opacity};z-index:${index + 1}`;
   let content = "";
-  if (element.kind === "panel") content = `<div class="panel-fill" style="background:${element.background};border:${element.borderWidth}px solid ${element.borderColor};border-radius:${element.borderRadius}px"></div>`;
-  if (element.kind === "image") content = `<img draggable="false" src="${element.src}" alt="${escapeHtml(element.name)}" style="object-fit:${element.fit};border-radius:${element.borderRadius}px;filter:grayscale(${element.grayscale}%) contrast(${element.contrast}%)"/>`;
+  if (element.kind === "panel") {
+    const children = allElements.filter((child) => child.parentId === element.id);
+    content = `<div class="panel-fill" style="background:${element.background};border:${element.borderWidth}px solid ${element.borderColor};border-radius:${element.borderRadius}px"><div class="panel-clip-container" style="overflow:${element.clipChildren ? "hidden" : "visible"};border-radius:${element.borderRadius}px">${children.map((child, childIndex) => renderCanvasElement(child, childIndex, allElements)).join("")}</div></div>`;
+  }
+  if (element.kind === "image") {
+    const source = element.src || "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='80' height='80'%3E%3Crect width='80' height='80' fill='%23221d2c'/%3E%3Cpath d='M15 65 35 42 48 55 58 44 70 65Z' fill='%23ff4d8d'/%3E%3C/svg%3E";
+    const crop = getCropRect(element);
+    const hasSelection = crop.left > 0.001 || crop.top > 0.001 || crop.width < 0.999 || crop.height < 0.999;
+    const image = hasSelection
+      ? `<div class="image-crop-viewport"><img draggable="false" src="${source}" alt="${escapeHtml(element.name)}" style="position:absolute;left:${-(crop.left / crop.width) * 100}%;top:${-(crop.top / crop.height) * 100}%;width:${100 / crop.width}%;height:${100 / crop.height}%;max-width:none;border-radius:${element.borderRadius}px;filter:grayscale(${element.grayscale}%) contrast(${element.contrast}%);transform:none"/></div>`
+      : `<img draggable="false" src="${source}" alt="${escapeHtml(element.name)}" style="object-fit:${element.fit};object-position:${element.crop.x * 100}% ${element.crop.y * 100}%;border-radius:${element.borderRadius}px;filter:grayscale(${element.grayscale}%) contrast(${element.contrast}%);transform:scale(${element.crop.scale})"/>`;
+    content = `${image}${runtime.preferences.cropElementId === element.id ? cropOverlay(element) : ""}`;
+  }
   if (element.kind === "text") content = `<div class="text-content" style="color:${element.color};font-size:${element.fontSize}px;font-weight:${element.fontWeight};font-family:${element.fontFamily};text-align:${element.align};line-height:${element.lineHeight};letter-spacing:${element.letterSpacing}px">${escapeHtml(element.text).replaceAll("\n", "<br>")}</div>`;
   if (element.kind === "bubble") {
     content = `<div class="bubble-shape bubble-${element.variant}" style="--bubble-bg:${element.background};--bubble-color:${element.color};--bubble-border:${element.borderColor};--bubble-border-width:${element.borderWidth}px"><div style="font-size:${element.fontSize}px;font-weight:${element.fontWeight};text-align:${element.align}">${escapeHtml(element.text).replaceAll("\n", "<br>")}</div></div>`;
   }
-  return `<div class="${classes}" data-element-id="${element.id}" data-kind="${element.kind}" style="${style}">${content}${selected && !runtime.preferences.preview ? transformHandles() : ""}${element.locked ? `<span class="locked-badge">${icon("lock")}</span>` : ""}</div>`;
+  return `<div class="${classes} ${runtime.preferences.cropElementId === element.id ? "is-crop-mode" : ""}" data-element-id="${element.id}" data-kind="${element.kind}" style="${style}">${content}${selected && !runtime.preferences.preview ? transformHandles() : ""}${element.locked ? `<span class="locked-badge">${icon("lock")}</span>` : ""}</div>`;
+}
+
+function cropOverlay(element: ImageElement): string {
+  const crop = getCropRect(element);
+  const handles = ["nw", "n", "ne", "e", "se", "s", "sw", "w"]
+    .map((handle) => `<button type="button" class="crop-handle crop-handle-${handle}" data-crop-resize="${handle}" aria-label="ปรับขอบ Crop ${handle}"></button>`)
+    .join("");
+  return `<div class="crop-overlay"><div class="crop-selection" data-crop-move style="left:${crop.left * 100}%;top:${crop.top * 100}%;width:${crop.width * 100}%;height:${crop.height * 100}%"><span class="crop-grid"></span>${handles}<span class="crop-label">ลากกรอบเพื่อเลือกพื้นที่</span></div></div>`;
 }
 
 function transformHandles(): string {
@@ -246,12 +286,15 @@ function renderPageInspector(): string {
       <div class="field-row two-columns">${fieldNumber("กว้าง", "page-width", page.width, 320, 3000)}${fieldNumber("สูง", "page-height", page.height, 320, 5000)}</div>
       ${fieldColor("สีพื้นหลัง", "page-background", page.background)}
       <label class="field-block"><span>ทิศทางการอ่าน</span><select data-project-prop="readingDirection"><option value="rtl" ${runtime.project.readingDirection === "rtl" ? "selected" : ""}>ขวา → ซ้าย (Manga)</option><option value="ltr" ${runtime.project.readingDirection === "ltr" ? "selected" : ""}>ซ้าย → ขวา (Comic)</option></select></label>
+      ${renderHierarchyManager()}
       <div class="document-stats"><span><strong>${page.elements.length}</strong> องค์ประกอบ</span><span><strong>${runtime.project.pages.length}</strong> หน้า</span><span><strong>${runtime.project.assets.length}</strong> รูป</span></div>
     </section>
   `;
 }
 
 function renderElementInspector(element: MangaElement): string {
+  const selectedCount = runtime.selectedIds.length || (runtime.selectedId ? 1 : 0);
+  if (selectedCount > 1) return renderMultiInspector(selectedCount);
   return `
     <section class="inspector-section">
       <div class="inspector-heading"><div><span class="eyebrow">${element.kind.toUpperCase()}</span><h2>${escapeHtml(element.name)}</h2></div><button class="icon-button small" data-action="delete-element">${icon("trash")}</button></div>
@@ -260,7 +303,7 @@ function renderElementInspector(element: MangaElement): string {
       <div class="field-row two-columns">${fieldNumber("หมุน", "rotation", Math.round(element.rotation), -360, 360)}${fieldNumber("โปร่งใส %", "opacity-percent", Math.round(element.opacity * 100), 0, 100)}</div>
       <label class="toggle-field"><input type="checkbox" data-element-prop="lockAspect" ${element.lockAspect ? "checked" : ""}/><span>ล็อกสัดส่วนตอนย่อ/ขยาย</span></label>
       ${renderKindInspector(element)}
-      <div class="inspector-actions-grid"><button data-action="duplicate-element">${icon("duplicate")} ทำสำเนา</button><button data-action="toggle-lock">${icon(element.locked ? "unlock" : "lock")} ${element.locked ? "ปลดล็อก" : "ล็อก"}</button><button data-action="bring-forward">${icon("up")} ขึ้นหนึ่งชั้น</button><button data-action="send-backward">${icon("down")} ลงหนึ่งชั้น</button></div>
+      <div class="inspector-actions-grid"><button data-action="duplicate-element">${icon("duplicate")} ทำสำเนา</button><button data-action="toggle-lock">${icon(element.locked ? "unlock" : "lock")} ${element.locked ? "ปลดล็อก" : "ล็อก"}</button><button data-action="bring-forward">${icon("up")} ขึ้นหนึ่งชั้น</button><button data-action="send-backward">${icon("down")} ลงหนึ่งชั้น</button><button data-action="flip-horizontal">กลับด้านซ้าย–ขวา</button><button data-action="flip-vertical">กลับด้านบน–ล่าง</button></div>
     </section>
   `;
 }
@@ -273,11 +316,12 @@ function renderKindInspector(element: MangaElement): string {
 }
 
 function panelInspector(element: PanelElement): string {
-  return `<div class="section-label">รูปแบบช่อง</div>${fieldColor("พื้นช่อง", "background", element.background)}${fieldColor("สีเส้น", "borderColor", element.borderColor)}<div class="field-row two-columns">${fieldNumber("ความหนาเส้น", "borderWidth", element.borderWidth, 0, 40)}${fieldNumber("มุมโค้ง", "borderRadius", element.borderRadius, 0, 200)}</div>`;
+  return `<div class="section-label">รูปแบบช่อง</div>${fieldColor("พื้นช่อง", "background", element.background)}${fieldColor("สีเส้น", "borderColor", element.borderColor)}<div class="field-row two-columns">${fieldNumber("ความหนาเส้น", "borderWidth", element.borderWidth, 0, 40)}${fieldNumber("มุมโค้ง", "borderRadius", element.borderRadius, 0, 200)}</div><label class="toggle-field"><input type="checkbox" data-element-prop="clipChildren" ${element.clipChildren ? "checked" : ""}/><span>Clip รูปในกรอบนี้</span></label>`;
 }
 
 function imageInspector(element: ImageElement): string {
-  return `<div class="section-label">การแสดงรูป</div><label class="field-block"><span>การพอดีกรอบ</span><select data-element-prop="fit">${option("cover", "เต็มกรอบ (Crop)", element.fit)}${option("contain", "เห็นทั้งรูป", element.fit)}${option("stretch", "ยืดอิสระ", element.fit)}</select></label><div class="field-row two-columns">${fieldNumber("ขาวดำ %", "grayscale", element.grayscale, 0, 100)}${fieldNumber("Contrast %", "contrast", element.contrast, 0, 250)}</div>${fieldNumber("มุมโค้ง", "borderRadius", element.borderRadius, 0, 300)}<button class="wide-action subtle" data-action="replace-image">เปลี่ยนรูปนี้</button>`;
+  const parent = element.parentId ? activePage().elements.find((candidate) => candidate.id === element.parentId) : null;
+  return `<div class="section-label">การแสดงรูป</div><label class="field-block"><span>การพอดีกรอบ</span><select data-element-prop="fit">${option("cover", "เต็มกรอบ (Crop)", element.fit)}${option("contain", "เห็นทั้งรูป", element.fit)}${option("stretch", "ยืดอิสระ", element.fit)}</select></label><div class="field-row two-columns">${fieldNumber("ขาวดำ %", "grayscale", element.grayscale, 0, 100)}${fieldNumber("Contrast %", "contrast", element.contrast, 0, 250)}</div>${fieldNumber("มุมโค้ง", "borderRadius", element.borderRadius, 0, 300)}<div class="section-label">ตำแหน่ง Crop</div><div class="field-row three-columns">${fieldNumber("X", "crop-x", Math.round(element.crop.x * 100), 0, 100)}${fieldNumber("Y", "crop-y", Math.round(element.crop.y * 100), 0, 100)}${fieldNumber("Zoom", "crop-scale", element.crop.scale, 1, 5, 0.05)}</div><div class="inspector-actions-grid"><button data-action="enter-crop">${runtime.preferences.cropElementId === element.id ? "เสร็จสิ้น Crop" : "เลือกพื้นที่ Crop"}</button>${parent ? `<button data-action="detach-image">นำรูปออกจากช่อง</button>` : `<button data-action="attach-image" disabled title="ลากรูปเข้าไปในช่องก่อน">ผูกกับช่อง</button>`}</div><button class="wide-action subtle" data-action="replace-image">เปลี่ยนรูปนี้</button>`;
 }
 
 function textInspector(element: TextElement): string {
@@ -306,6 +350,23 @@ function fieldColor(label: string, prop: string, value: string): string {
 
 function alignmentField(value: TextAlign): string {
   return `<div class="field-block"><span>จัดแนว</span><div class="segmented-control"><button data-set-align="left" class="${value === "left" ? "is-active" : ""}">ซ้าย</button><button data-set-align="center" class="${value === "center" ? "is-active" : ""}">กลาง</button><button data-set-align="right" class="${value === "right" ? "is-active" : ""}">ขวา</button></div></div>`;
+}
+
+function renderMultiInspector(count: number): string {
+  return `<section class="inspector-section"><div class="inspector-heading"><div><span class="eyebrow">MULTI-SELECT</span><h2>เลือก ${count} องค์ประกอบ</h2></div></div><div class="section-label">จัดวาง</div><div class="inspector-actions-grid"><button data-action="align-left">ชิดซ้าย</button><button data-action="align-center">กึ่งกลาง</button><button data-action="align-right">ชิดขวา</button><button data-action="align-top">ชิดบน</button><button data-action="align-middle">กึ่งกลางแนวตั้ง</button><button data-action="align-bottom">ชิดล่าง</button><button data-action="distribute-horizontal">กระจายแนวนอน</button><button data-action="distribute-vertical">กระจายแนวตั้ง</button></div><div class="inspector-actions-grid"><button data-action="group-elements">จัดกลุ่ม</button><button data-action="duplicate-element">ทำสำเนา</button><button data-action="flip-horizontal">กลับด้านซ้าย–ขวา</button><button data-action="flip-vertical">กลับด้านบน–ล่าง</button></div></section>`;
+}
+
+function renderHierarchyManager(): string {
+  const volume = runtime.project.volumes.find((item) => item.id === runtime.project.activeVolumeId) ?? runtime.project.volumes[0];
+  const chapter = runtime.project.chapters.find((item) => item.id === runtime.project.activeChapterId) ?? runtime.project.chapters[0];
+  return `<div class="hierarchy-manager"><div class="section-label">เล่มและบท</div><div class="field-row two-columns"><label class="field-block"><span>Volume</span><select data-hierarchy-volume>${runtime.project.volumes.map((item) => `<option value="${item.id}" ${item.id === volume?.id ? "selected" : ""}>${escapeHtml(item.name)}</option>`).join("")}</select></label><label class="field-block"><span>Chapter</span><select data-hierarchy-chapter>${runtime.project.chapters.filter((item) => item.volumeId === volume?.id).map((item) => `<option value="${item.id}" ${item.id === chapter?.id ? "selected" : ""}>${escapeHtml(item.name)}</option>`).join("")}</select></label></div><div class="field-row two-columns"><label class="field-block"><span>ชื่อเล่ม</span><input type="text" data-hierarchy-volume-name value="${escapeHtml(volume?.name ?? "")}"/></label><label class="field-block"><span>ชื่อบท</span><input type="text" data-hierarchy-chapter-name value="${escapeHtml(chapter?.name ?? "")}"/></label></div><div class="inspector-actions-grid"><button data-action="add-volume">+ เล่ม</button><button data-action="add-chapter">+ บท</button><button data-action="delete-volume" ${runtime.project.volumes.length <= 1 ? "disabled" : ""}>ลบเล่ม</button><button data-action="delete-chapter" ${runtime.project.chapters.length <= 1 ? "disabled" : ""}>ลบบท</button></div></div>`;
+}
+
+function saveStatusLabel(): string {
+  if (runtime.saveStatus === "saving") return "กำลังบันทึก…";
+  if (runtime.saveStatus === "offline") return "ออฟไลน์ • บันทึกในเครื่อง";
+  if (runtime.saveStatus === "error") return "บันทึกผิดพลาด";
+  return `บันทึกล่าสุด ${formatDate(runtime.project.updatedAt)}`;
 }
 
 function option(value: string, label: string, current: string): string {
@@ -339,5 +400,5 @@ function renderPageStrip(): string {
       return `<button class="page-card ${page.id === runtime.project.activePageId ? "is-active" : ""}" data-page-id="${page.id}"><span class="page-number">${index + 1}</span><span class="page-mini" style="background:${page.background}">${mini}</span><span class="page-card-meta"><strong>${escapeHtml(page.name)}</strong><small>${panels.length} ช่อง</small></span></button>`;
     })
     .join("");
-  return `<footer class="page-strip"><div class="page-strip-label"><span>หน้า</span><strong>${runtime.project.pages.length}</strong></div><div class="page-cards">${cards}</div><div class="page-actions"><button data-action="add-page">${icon("plus")} หน้าใหม่</button><button data-action="duplicate-page">${icon("duplicate")} ทำสำเนา</button><button data-action="delete-page" ${runtime.project.pages.length <= 1 ? "disabled" : ""}>${icon("trash")}</button></div></footer>`;
+  return `<footer class="page-strip"><div class="page-strip-label"><span>หน้า</span><strong>${runtime.project.pages.length}</strong></div><div class="page-cards">${cards}</div><div class="page-actions"><button data-action="add-page">${icon("plus")} หน้าใหม่</button><button data-action="duplicate-page">${icon("duplicate")} ทำสำเนา</button><button data-action="move-page-back" title="เลื่อนหน้าก่อนหน้า">←</button><button data-action="move-page-forward" title="เลื่อนหน้าถัดไป">→</button><button data-action="export-project">ส่งออก .cherrymanga</button><button data-action="import-project">นำเข้า</button><button data-action="delete-page" ${runtime.project.pages.length <= 1 ? "disabled" : ""}>${icon("trash")}</button></div></footer>`;
 }
