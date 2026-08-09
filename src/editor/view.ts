@@ -8,9 +8,16 @@ import type {
   TextElement,
   ImageElement,
   RasterLayer,
+  ToolId,
 } from "../types";
 import { getCropRect } from "./actions";
-import { TOOL_DEFINITIONS, TOOL_GROUP_LABELS, type ToolGroup } from "./tools";
+import {
+  TOOL_DEFINITIONS,
+  TOOL_GROUP_LABELS,
+  TOOL_GROUP_LABELS_TH,
+  type ToolDefinition,
+  type ToolGroup,
+} from "./tools";
 import { activePage, runtime, selectedElement } from "./state";
 import { isRasterLayer, orderedPageLayers } from "./layers";
 import { PAGE_PRESETS } from "./document";
@@ -136,15 +143,111 @@ function renderLeftSidebar(): string {
   `;
 }
 
+const QUICK_TOOL_IDS: readonly ToolId[] = [
+  "select",
+  "rectangular-marquee",
+  "brush",
+  "eraser",
+  "paint-bucket",
+  "text",
+  "crop",
+  "panel-cutter",
+] as ToolId[];
+
+const TOOL_GLYPHS: Readonly<Record<string, string>> = {
+  select: "↖",
+  hand: "✋",
+  zoom: "+",
+  "rotate-canvas": "↻",
+  navigator: "◇",
+  "rectangular-marquee": "▧",
+  "elliptical-marquee": "○",
+  lasso: "⌁",
+  "polygonal-lasso": "⬡",
+  "magic-wand": "✦",
+  "quick-selection": "◩",
+  brush: "●",
+  pencil: "✎",
+  pen: "✒",
+  "g-pen": "G",
+  eraser: "◇",
+  "hard-eraser": "◆",
+  "soft-eraser": "◈",
+  fill: "◩",
+  "paint-bucket": "▰",
+  gradient: "◒",
+  line: "╱",
+  rectangle: "□",
+  ellipse: "○",
+  polygon: "⬡",
+  star: "☆",
+  "free-transform": "⌗",
+  rotate: "↻",
+  eyedropper: "⌁",
+  text: "T",
+  "horizontal-type": "T",
+  "vertical-type": "T↧",
+  "frame-border": "▤",
+  "panel-cutter": "▥",
+  "speech-balloon": "◯",
+  "thought-balloon": "◌",
+  "jagged-balloon": "✹",
+  "straight-ruler": "∕",
+  "symmetry-ruler": "⋮",
+  crop: "⌗",
+  "layer-mask": "◐",
+  "alpha-lock": "α",
+  asset: "▧",
+};
+
+const GROUP_GLYPHS: Record<ToolGroup, string> = {
+  navigation: "↖",
+  selection: "▧",
+  drawing: "●",
+  eraser: "◇",
+  fill: "◩",
+  shape: "□",
+  vector: "⌁",
+  transform: "⌗",
+  retouch: "✦",
+  color: "◉",
+  text: "T",
+  manga: "◯",
+  ruler: "∕",
+  measurement: "⌗",
+  mask: "◐",
+  reference: "◇",
+  animation: "▶",
+  productivity: "⇩",
+};
+
+function toolGlyph(tool: ToolDefinition): string {
+  return TOOL_GLYPHS[tool.id] ?? GROUP_GLYPHS[tool.group];
+}
+
+function capabilityLabel(tool: ToolDefinition): string {
+  if (tool.capability === "experimental") return "ทดลอง";
+  if (tool.capability === "adapter") return "รอ API";
+  if (tool.capability === "disabled") return "เร็ว ๆ นี้";
+  return "พร้อมใช้";
+}
+
+function renderQuickTool(tool: ToolDefinition): string {
+  const reason = tool.reason ?? "พร้อมใช้งานใน browser";
+  return `<button class="quick-tool ${runtime.preferences.tool === tool.id ? "is-active" : ""}" data-tool="${tool.id}" title="${escapeHtml(`${tool.labelTh} • ${tool.labelEn} — ${reason}`)}" aria-label="${escapeHtml(`${tool.labelTh} ${tool.labelEn}`)}"><span class="quick-tool-icon" aria-hidden="true">${toolGlyph(tool)}</span><span>${escapeHtml(tool.labelTh)}</span>${tool.shortcut ? `<kbd>${escapeHtml(tool.shortcut)}</kbd>` : ""}</button>`;
+}
+
 function renderToolbox(): string {
   const groups = Object.keys(TOOL_GROUP_LABELS) as ToolGroup[];
-  return `<nav class="toolbox" aria-label="Photoshop style toolbox"><div class="toolbox-title">TOOLS</div>${groups.map((groupName) => {
+  const activeTool = TOOL_DEFINITIONS.find((tool) => tool.id === runtime.preferences.tool);
+  const quickTools = QUICK_TOOL_IDS.map((id) => TOOL_DEFINITIONS.find((tool) => tool.id === id)).filter((tool): tool is ToolDefinition => Boolean(tool));
+  const readyCount = TOOL_DEFINITIONS.filter((tool) => tool.capability === "ready" || tool.capability === "experimental").length;
+  return `<nav class="toolbox" aria-label="ชุดเครื่องมือวาดและแก้ไข"><header class="toolbox-header"><div><span>TOOL PALETTE</span><strong>เครื่องมือ</strong></div><small>${readyCount} พร้อมใช้</small></header><section class="quick-tools-wrap" aria-labelledby="quick-tools-title"><div class="toolbox-section-heading"><span id="quick-tools-title">เครื่องมือด่วน</span><small>SHORTCUTS</small></div><div class="quick-tools" role="group" aria-label="เครื่องมือด่วน">${quickTools.map(renderQuickTool).join("")}</div><p>เลือกเครื่องมือหลักได้ทันที หรือเปิดหมวดด้านล่างเพื่อดูทั้งหมด</p></section><div class="toolbox-section-heading toolbox-catalog-heading"><span>เครื่องมือทั้งหมด</span><small>${TOOL_DEFINITIONS.length} TOOLS</small></div>${groups.map((groupName) => {
     const tools = TOOL_DEFINITIONS.filter((tool) => tool.group === groupName);
-    return `<details class="tool-group" ${groupName === "navigation" || groupName === "drawing" ? "open" : ""}><summary>${TOOL_GROUP_LABELS[groupName]}<span>${tools.length}</span></summary><div class="tool-group-items">${tools.map((tool) => {
+    return `<details class="tool-group" ${activeTool?.group === groupName ? "open" : ""}><summary><span class="tool-group-icon" aria-hidden="true">${GROUP_GLYPHS[groupName]}</span><span class="tool-group-name"><b>${TOOL_GROUP_LABELS_TH[groupName]}</b><small>${TOOL_GROUP_LABELS[groupName]}</small></span><span class="tool-group-count">${tools.length}</span></summary><div class="tool-group-items">${tools.map((tool) => {
       const disabled = tool.capability === "disabled" || tool.capability === "adapter";
-      const status = tool.capability === "experimental" ? "ทดลอง" : tool.capability === "adapter" ? "adapter" : tool.capability === "disabled" ? "ปิด" : "พร้อม";
       const reason = tool.reason ? `${tool.reason}${tool.phase ? ` • ${tool.phase}` : ""}` : "พร้อมใช้งานใน browser";
-      return `<button class="tool-entry capability-${tool.capability} ${runtime.preferences.tool === tool.id ? "is-active" : ""}" data-tool="${tool.id}" ${disabled ? "disabled" : ""} title="${escapeHtml(`${tool.labelTh} • ${tool.labelEn} — ${reason}`)}" aria-label="${escapeHtml(`${tool.labelTh} ${tool.labelEn}`)}"><span class="tool-entry-icon">${tool.labelEn.slice(0, 1)}</span><span class="tool-entry-label"><b>${escapeHtml(tool.labelTh)}</b><small>${escapeHtml(tool.labelEn)}</small></span><em>${status}</em></button>`;
+      return `<button class="tool-entry capability-${tool.capability} ${runtime.preferences.tool === tool.id ? "is-active" : ""}" data-tool="${tool.id}" ${disabled ? "disabled" : ""} title="${escapeHtml(`${tool.labelTh} • ${tool.labelEn} — ${reason}`)}" aria-label="${escapeHtml(`${tool.labelTh} ${tool.labelEn}`)}"><span class="tool-entry-icon" aria-hidden="true">${toolGlyph(tool)}</span><span class="tool-entry-label"><b>${escapeHtml(tool.labelTh)}</b><small>${escapeHtml(tool.labelEn)}</small></span><span class="tool-entry-meta">${tool.shortcut ? `<kbd>${escapeHtml(tool.shortcut)}</kbd>` : ""}<em>${capabilityLabel(tool)}</em></span></button>`;
     }).join("")}</div></details>`;
   }).join("")}</nav>`;
 }

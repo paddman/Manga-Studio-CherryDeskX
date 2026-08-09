@@ -260,6 +260,27 @@ export const TOOL_GROUP_LABELS: Record<ToolGroup, string> = {
   productivity: "Export & Productivity",
 };
 
+export const TOOL_GROUP_LABELS_TH: Record<ToolGroup, string> = {
+  navigation: "นำทาง",
+  selection: "เลือกพื้นที่",
+  drawing: "วาดเส้นและลงสี",
+  eraser: "ยางลบ",
+  fill: "เติมสีและไล่สี",
+  shape: "เส้นและรูปทรง",
+  vector: "เวกเตอร์",
+  transform: "แปลงและจัดวาง",
+  retouch: "รีทัชภาพ",
+  color: "จัดการสี",
+  text: "ข้อความ",
+  manga: "การ์ตูนและมังงะ",
+  ruler: "ไม้บรรทัดและไกด์",
+  measurement: "ครอปและวัดระยะ",
+  mask: "มาสก์และเลเยอร์",
+  reference: "3D และภาพอ้างอิง",
+  animation: "แอนิเมชัน",
+  productivity: "ส่งออกและงานอัตโนมัติ",
+};
+
 export function toolId(value: string): ToolId {
   return value as ToolId;
 }
