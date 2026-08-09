@@ -16,8 +16,10 @@ function testProject(): MangaProject {
     order: 0,
     thumbnailVersion: 1,
     elements: [createPanel("panel", 0, 0, 800, 1000), createText("A", 20, 50, 100, 50), createText("B", 280, 200, 100, 50), createText("C", 600, 350, 100, 50)],
+    rasterLayers: [],
+    layerOrder: [],
   };
-  return { id: "project", name: "Test", schemaVersion: 2, readingDirection: "ltr", pagePreset: "custom", dpi: 300, colorMode: "rgb", bleed: 0, trim: 0, safeArea: 30, gutter: 16, activePageId: page.id, activeChapterId: "chapter", activeVolumeId: "volume", volumes: [{ id: "volume", name: "เล่ม 1", chapterIds: ["chapter"], order: 0 }], chapters: [{ id: "chapter", volumeId: "volume", name: "บทที่ 1", pageIds: [page.id], order: 0 }], pages: [page], assets: [], createdAt: "2024-01-01T00:00:00.000Z", updatedAt: "2024-01-01T00:00:00.000Z" };
+  return { id: "project", name: "Test", schemaVersion: 3, readingDirection: "ltr", pagePreset: "custom", dpi: 300, colorMode: "rgb", bleed: 0, trim: 0, safeArea: 30, gutter: 16, activePageId: page.id, activeChapterId: "chapter", activeVolumeId: "volume", volumes: [{ id: "volume", name: "เล่ม 1", chapterIds: ["chapter"], order: 0 }], chapters: [{ id: "chapter", volumeId: "volume", name: "บทที่ 1", pageIds: [page.id], order: 0 }], pages: [page], assets: [], createdAt: "2024-01-01T00:00:00.000Z", updatedAt: "2024-01-01T00:00:00.000Z" };
 }
 
 describe("editor actions", () => {

@@ -32,23 +32,24 @@ Cherry Manga Studio is a browser-based visual editor for composing manga, comics
 - Volume, chapter and page metadata with page manager controls.
 - PNG/JPG/PDF/CBZ/ZIP/Webtoon exports and `.cherrymanga` import/export.
 - IndexedDB asset repository with versioned migration.
+- Photoshop-style tool registry with real local raster brushes, selection clips, erasers, fills, shapes and explicit disabled/adapter states for unavailable engines.
+- Unified page layer metadata with raster layers and IndexedDB bitmap snapshots.
 - Docker and Nginx deployment files.
 - GitHub Actions build validation.
 
 ## Production Editor Foundation status
 
-The current branch implements the local-first foundation for the items above. Cloud identity, remote project revisions, signed asset delivery and AI jobs remain typed adapters with explicit disabled states until their CherryDeskX services are available.
+The current branch implements the local-first foundation for the items above. Cloud identity, remote project revisions, signed asset delivery and AI jobs remain typed adapters with explicit disabled states until their CherryDeskX services are available. The full tool catalog is visible in the editor, while only tools with real local behavior are enabled; local approximations are labeled experimental.
 
 ## Remaining production phases
 
 - Authentication and shared CherryDeskX workspace.
 - Cloud project storage, object storage and asset deduplication.
-- Chapter and volume hierarchy.
 - Autosave revisions and collaborative editing.
 - Collaborative editing and server-side revision conflict handling.
 - Signed asset upload/download and server-side export workers.
 - Fonts, vertical Japanese text and advanced SFX lettering.
-- Snap guides, rulers, groups and reusable styles.
+- Advanced vector paths, complete rulers, reusable styles and production typography.
 
 ## AI phase
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createStarterProject } from "../src/sample";
-import { MemoryAssetRepository } from "../src/persistence/repository";
+import { MemoryAssetRepository, MemoryRasterRepository } from "../src/persistence/repository";
 import { exportProjectBundle, importProjectBundle } from "../src/persistence/archive";
 import { migrateProject, serializeProject } from "../src/persistence/serialization";
 import { validateImageFile } from "../src/security/files";
@@ -17,7 +17,8 @@ describe("project persistence", () => {
     };
     const project = migrateProject(legacy);
     const json = JSON.stringify(serializeProject(project));
-    expect(project.schemaVersion).toBe(2);
+    expect(project.schemaVersion).toBe(3);
+    expect(project.pages[0]?.rasterLayers).toEqual([]);
     expect(project.pages[0]?.elements[0]?.kind).toBe("image");
     expect(json).not.toContain("data:image");
     expect(project.pages[0]?.elements[0]?.kind === "image" ? project.pages[0].elements[0].crop.scale : 0).toBe(1);
@@ -39,5 +40,33 @@ describe("project persistence", () => {
   it("accepts a real PNG file without relying on its browser MIME value", async () => {
     const file = new File([Uint8Array.of(0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a)], "page.PNG", { type: "" });
     await expect(validateImageFile(file)).resolves.toBeUndefined();
+  });
+
+  it("round-trips raster metadata and binary snapshot entries", async () => {
+    const project = createStarterProject();
+    const page = project.pages[0]!;
+    const layer = {
+      id: "raster-test",
+      kind: "raster" as const,
+      name: "หมึก",
+      width: page.width,
+      height: page.height,
+      opacity: 1,
+      hidden: false,
+      locked: false,
+      alphaLock: false,
+      blendMode: "source-over" as const,
+      bitmapKey: "project/page/raster-test",
+      strokes: [{ id: "stroke-1", kind: "stroke" as const, preset: "g-pen", points: [{ x: 2, y: 3, pressure: 1 }], color: "#000", size: 5, opacity: 1, blendMode: "source-over" as const }],
+    };
+    page.rasterLayers.push(layer);
+    page.layerOrder.push(layer.id);
+    const assets = new MemoryAssetRepository();
+    const rasters = new MemoryRasterRepository();
+    await rasters.put(layer.bitmapKey, new Blob(["raster-png"], { type: "image/png" }));
+    const archive = await exportProjectBundle(project, assets, rasters);
+    const imported = await importProjectBundle(archive);
+    expect(imported.project.pages[0]?.rasterLayers[0]?.strokes[0]?.preset).toBe("g-pen");
+    expect(await imported.rasters.get(layer.bitmapKey)?.text()).toBe("raster-png");
   });
 });
