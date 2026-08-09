@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { canUseTool, DEFAULT_TOOL_KEYMAP, resolveToolShortcut, TOOL_CATALOG, TOOL_DEFINITIONS, toolId } from "../src/editor/tools";
+import { canUseTool, DEFAULT_TOOL_KEYMAP, resolveToolShortcut, TOOL_CATALOG, TOOL_DEFINITIONS, TOOL_GROUP_LABELS, TOOL_GROUP_LABELS_TH, toolId } from "../src/editor/tools";
 
 describe("typed tool registry", () => {
   it("has one unique definition for every canonical catalog entry", () => {
     expect(TOOL_DEFINITIONS).toHaveLength(TOOL_CATALOG.length);
     expect(new Set(TOOL_DEFINITIONS.map((tool) => tool.id)).size).toBe(TOOL_DEFINITIONS.length);
     expect(TOOL_DEFINITIONS.every((tool) => tool.labelTh && tool.labelEn && tool.group)).toBe(true);
+    expect(Object.keys(TOOL_GROUP_LABELS_TH)).toEqual(Object.keys(TOOL_GROUP_LABELS));
+    expect(Object.values(TOOL_GROUP_LABELS_TH).every(Boolean)).toBe(true);
   });
 
   it("never enables a tool without a registered interaction engine", () => {

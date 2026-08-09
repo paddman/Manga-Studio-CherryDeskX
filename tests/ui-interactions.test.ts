@@ -33,6 +33,28 @@ describe("production editor DOM interactions", () => {
     expect(freeTransform?.textContent).toContain("แปลงอิสระ");
   });
 
+  it("renders a readable Thai-first tool palette with quick actions and status metadata", () => {
+    const app = mountEditor();
+    expect(app.querySelector(".toolbox-header")?.textContent).toContain("เครื่องมือ");
+    expect(app.querySelectorAll(".quick-tool")).toHaveLength(8);
+    expect(app.querySelector('[data-tool="brush"] .quick-tool-icon')?.textContent).toBe("●");
+    expect(app.querySelector('[data-tool="brush"] kbd')?.textContent).toBe("B");
+
+    const selectionGroup = [...app.querySelectorAll<HTMLDetailsElement>(".tool-group")].find((group) => group.querySelector("summary")?.textContent?.includes("เลือกพื้นที่"));
+    expect(selectionGroup?.querySelector(".tool-group-name")?.textContent).toContain("Selection");
+    const marquee = selectionGroup?.querySelector<HTMLButtonElement>('[data-tool="rectangular-marquee"]');
+    expect(marquee?.querySelector(".tool-entry-meta em")?.textContent).toBe("พร้อมใช้");
+    expect(marquee?.querySelector("kbd")?.textContent).toBe("M");
+  });
+
+  it("opens the group that contains the active tool", () => {
+    runtime.preferences.tool = "brush" as typeof runtime.preferences.tool;
+    const app = mountEditor();
+    const drawingGroup = [...app.querySelectorAll<HTMLDetailsElement>(".tool-group")].find((group) => group.querySelector("summary")?.textContent?.includes("วาดเส้นและลงสี"));
+    expect(drawingGroup?.open).toBe(true);
+    expect(drawingGroup?.querySelector('[data-tool="brush"]')?.classList.contains("is-active")).toBe(true);
+  });
+
   it("keeps adapter tools non-interactive and explains the missing backend", () => {
     const app = mountEditor();
     const selectSubject = app.querySelector<HTMLButtonElement>('[data-tool="select-subject"]');
