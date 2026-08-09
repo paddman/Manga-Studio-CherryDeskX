@@ -24,6 +24,10 @@ function drawPolyline(ctx: CanvasRenderingContext2D, points: RasterPoint[]): voi
 
 function selectionPath(ctx: CanvasRenderingContext2D, selection: PixelSelectionShape): void {
   ctx.beginPath();
+  if (selection.mode === "pixels") {
+    for (const span of selection.spans ?? []) ctx.rect(span.x, span.y, span.width, 1);
+    return;
+  }
   if (selection.mode === "rectangle") {
     ctx.rect(selection.x, selection.y, selection.width, selection.height);
     return;
@@ -53,6 +57,22 @@ function withSelection(ctx: CanvasRenderingContext2D, selection: PixelSelectionS
 
 function pointInSelection(x: number, y: number, selection: PixelSelectionShape | undefined): boolean {
   if (!selection) return true;
+  if (selection.mode === "pixels") {
+    const spans = selection.spans ?? [];
+    const row = Math.floor(y);
+    let low = 0;
+    let high = spans.length;
+    while (low < high) {
+      const middle = Math.floor((low + high) / 2);
+      if ((spans[middle]?.y ?? Number.MAX_SAFE_INTEGER) < row) low = middle + 1;
+      else high = middle;
+    }
+    for (let index = low; index < spans.length && spans[index]?.y === row; index += 1) {
+      const span = spans[index]!;
+      if (x >= span.x && x < span.x + span.width) return true;
+    }
+    return false;
+  }
   if (selection.mode === "rectangle") return x >= selection.x && x <= selection.x + selection.width && y >= selection.y && y <= selection.y + selection.height;
   if (selection.mode === "ellipse") {
     const radiusX = Math.max(1, selection.width / 2);
@@ -350,12 +370,42 @@ function drawShape(ctx: CanvasRenderingContext2D, stroke: RasterStroke): void {
   ctx.strokeRect(x, y, width, height);
 }
 
+function drawTonePattern(ctx: CanvasRenderingContext2D, stroke: RasterStroke, width: number, height: number): boolean {
+  if (stroke.preset !== "manga-tone" && stroke.preset !== "screentone" && stroke.preset !== "gradient-tone") return false;
+  const spacing = Math.max(5, Math.min(28, Math.round(stroke.size * 0.75)));
+  ctx.globalCompositeOperation = stroke.blendMode;
+  ctx.fillStyle = stroke.color;
+  ctx.strokeStyle = stroke.color;
+  ctx.globalAlpha = Math.min(1, stroke.opacity);
+  if (stroke.preset === "manga-tone") {
+    ctx.lineWidth = Math.max(1, spacing * 0.16);
+    for (let offset = -height; offset < width + height; offset += spacing) {
+      ctx.beginPath();
+      ctx.moveTo(offset, 0);
+      ctx.lineTo(offset - height, height);
+      ctx.stroke();
+    }
+    return true;
+  }
+  for (let y = spacing / 2; y < height; y += spacing) {
+    for (let x = spacing / 2; x < width; x += spacing) {
+      const gradientFactor = stroke.preset === "gradient-tone" ? Math.max(0.08, Math.min(1, y / Math.max(1, height))) : 0.46;
+      const radius = Math.max(0.7, spacing * 0.34 * gradientFactor);
+      ctx.beginPath();
+      ctx.arc(x + (Math.floor(y / spacing) % 2 ? spacing / 2 : 0), y, radius, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+  return true;
+}
+
 function drawSpecialStroke(ctx: CanvasRenderingContext2D, stroke: RasterStroke, width: number, height: number): void {
   if (stroke.kind === "bucket" || stroke.kind === "erase-fill") {
     floodFill(ctx, stroke, width, height, stroke.kind === "erase-fill");
     return;
   }
   if (stroke.kind === "fill") {
+    if (drawTonePattern(ctx, stroke, width, height)) return;
     ctx.globalCompositeOperation = stroke.blendMode;
     ctx.globalAlpha = stroke.opacity;
     ctx.fillStyle = stroke.color;

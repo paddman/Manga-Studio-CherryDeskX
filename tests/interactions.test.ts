@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildPixelSelection,
+  buildContiguousPixelSelection,
   clientToPagePoint,
   clientToRotatedPagePoint,
   isEraserToolId,
@@ -55,6 +56,25 @@ describe("editor interactions", () => {
     expect(lasso?.points).toHaveLength(3);
   });
 
+  it("builds exact contiguous pixel spans for Magic Wand and Quick Selection", () => {
+    const width = 5;
+    const height = 3;
+    const pixels = new Uint8ClampedArray(width * height * 4);
+    for (let row = 0; row < height; row += 1) {
+      const offset = (row * width + 2) * 4;
+      pixels[offset] = 255;
+      pixels[offset + 3] = 255;
+    }
+    const selection = buildContiguousPixelSelection(pixels, width, height, 0, 1, 0);
+    expect(selection).toMatchObject({ mode: "pixels", x: 0, y: 0, width: 2, height: 3 });
+    expect(selection?.spans).toEqual([
+      { x: 0, y: 0, width: 2 },
+      { x: 0, y: 1, width: 2 },
+      { x: 0, y: 2, width: 2 },
+    ]);
+    expect(isUsablePixelSelection(selection)).toBe(true);
+  });
+
   it("maps selection, shape, fill, and eraser tools to real engine primitives", () => {
     expect(selectionModeForToolId("elliptical-marquee")).toBe("ellipse");
     expect(selectionModeForToolId("selection-pen")).toBe("lasso");
@@ -64,10 +84,13 @@ describe("editor interactions", () => {
     expect(rasterStrokeKindForToolId("magic-eraser")).toBe("erase-fill");
     expect(rasterStrokeKindForToolId("gradient")).toBe("gradient");
     expect(rasterStrokeKindForToolId("rounded-rectangle")).toBe("rectangle");
+    expect(rasterStrokeKindForToolId("screentone")).toBe("fill");
+    expect(rasterStrokeKindForToolId("gradient-tone")).toBe("fill");
     expect(rasterStrokeKindForToolId("g-pen")).toBe("stroke");
     expect(isEraserToolId("background-eraser")).toBe(true);
     expect(isEraserToolId("eraser")).toBe(true);
     expect(isEraserToolId("brush")).toBe(false);
+    expect(isEraserToolId("tone-scraping")).toBe(true);
   });
 
   it("rejects unsafe full-resolution raster dimensions with a clear reason", () => {

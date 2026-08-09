@@ -31,7 +31,7 @@ describe("document presets and publishing metadata", () => {
         blendMode: "source-over",
         selection: { mode: "rectangle", points: [{ x: 5, y: 6, pressure: 1 }, { x: 15, y: 16, pressure: 1 }], x: 5, y: 6, width: 10, height: 10 },
       }],
-      mask: { enabled: true, inverted: false, selection: { mode: "ellipse", points: [{ x: 4, y: 8, pressure: 1 }, { x: 20, y: 24, pressure: 1 }], x: 4, y: 8, width: 16, height: 16 } },
+      mask: { enabled: true, inverted: false, selection: { mode: "pixels", points: [{ x: 4, y: 8, pressure: 1 }], x: 4, y: 8, width: 2, height: 1, spans: [{ x: 4, y: 8, width: 2 }] } },
     });
     const originalWidth = page.width;
     const originalHeight = page.height;
@@ -39,7 +39,7 @@ describe("document presets and publishing metadata", () => {
     expect(element).toMatchObject({ x: original.x * 2, y: original.y * 3, width: original.width * 2, height: original.height * 3 });
     expect(page.rasterLayers[0]?.strokes[0]?.points[0]).toMatchObject({ x: 20, y: 60 });
     expect(page.rasterLayers[0]?.strokes[0]?.selection).toMatchObject({ x: 10, y: 18, width: 20, height: 30 });
-    expect(page.rasterLayers[0]?.mask?.selection).toMatchObject({ x: 8, y: 24, width: 32, height: 48 });
+    expect(page.rasterLayers[0]?.mask?.selection).toMatchObject({ x: 8, y: 24, width: 4, height: 3, spans: [{ x: 8, y: 24, width: 4 }, { x: 8, y: 25, width: 4 }, { x: 8, y: 26, width: 4 }] });
   });
 
   it("applies production presets and clamps editable metadata", () => {

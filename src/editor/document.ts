@@ -30,6 +30,23 @@ function scaleSelection(selection: PixelSelectionShape | undefined, scaleX: numb
   selection.width *= scaleX;
   selection.height *= scaleY;
   selection.points.forEach((point) => scalePoint(point, scaleX, scaleY));
+  if (selection.mode === "pixels" && selection.spans) {
+    const scaled = selection.spans.flatMap((span) => {
+      const startY = Math.floor(span.y * scaleY);
+      const endY = Math.max(startY + 1, Math.ceil((span.y + 1) * scaleY));
+      const startX = Math.floor(span.x * scaleX);
+      const endX = Math.max(startX + 1, Math.ceil((span.x + span.width) * scaleX));
+      return Array.from({ length: endY - startY }, (_, offset) => ({ x: startX, y: startY + offset, width: endX - startX }));
+    }).sort((a, b) => a.y - b.y || a.x - b.x);
+    const merged: typeof scaled = [];
+    for (const span of scaled) {
+      const previous = merged.at(-1);
+      if (previous && previous.y === span.y && span.x <= previous.x + previous.width) {
+        previous.width = Math.max(previous.x + previous.width, span.x + span.width) - previous.x;
+      } else merged.push(span);
+    }
+    selection.spans = merged.slice(0, 250_000);
+  }
 }
 
 export function resizePageContent(page: MangaPage, width: number, height: number): void {
@@ -58,6 +75,9 @@ export function resizePageContent(page: MangaPage, width: number, height: number
     if (element.kind === "bubble") {
       element.borderWidth *= geometricScale;
       element.fontSize *= geometricScale;
+      element.letterSpacing *= geometricScale;
+      element.outlineWidth *= geometricScale;
+      element.shadowBlur *= geometricScale;
       element.tailX *= scaleX;
       element.tailY *= scaleY;
       element.tails.forEach((tail) => {

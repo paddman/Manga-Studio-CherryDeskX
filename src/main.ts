@@ -5,7 +5,7 @@ import { exportProjectBundle, importProjectBundle } from "./persistence/archive"
 import { hydrateAssetSources } from "./persistence/serialization";
 import { renderRasterLayer } from "./editor/raster";
 import { addRasterLayer, applyPixelSelectionAsLayerMask, clearPixelSelection, clearRasterLayer, ensureRasterLayer, invertRasterLayerMask, persistRasterCanvas, recordRasterStroke, removeRasterLayerMask, selectRasterLayer, splitLastStrokeToLayer } from "./editor/raster-actions";
-import { buildPixelSelection, clientToPagePoint, clientToRotatedPagePoint, isEraserToolId, isUsablePixelSelection, rasterStrokeKindForToolId, rotatedViewportSize, selectionModeForToolId } from "./editor/interactions";
+import { buildContiguousPixelSelection, buildPixelSelection, clientToPagePoint, clientToRotatedPagePoint, isEraserToolId, isUsablePixelSelection, rasterStrokeKindForToolId, rotatedViewportSize, selectionModeForToolId } from "./editor/interactions";
 import { canUseTool, getToolDefinition, isRasterTool, resolveToolShortcut, toolId } from "./editor/tools";
 import {
   addAssetToPage,
@@ -74,6 +74,8 @@ import {
 import { renderApp } from "./editor/view";
 import { applyPagePreset, setDocumentMetadata, type DocumentMetadataProperty } from "./editor/document";
 import { geometryBounds, rotateGeometries, scaleGeometries } from "./editor/transforms";
+import { splitPanelAtPoint } from "./editor/panels";
+import { addBubbleTail, applyTextStylePreset, removeBubbleTail, removeTextStylePreset, saveSelectedTextStyle } from "./editor/text-actions";
 import type { BubbleVariant, ExportFormat, ExportScaleMode, ExportScope, ImageElement, LeftTab, MangaElement, PagePreset, PixelSelectionShape, RasterPoint, RasterStroke, TextAlign, Tool } from "./types";
 
 const root = document.querySelector<HTMLDivElement>("#app");
@@ -92,6 +94,17 @@ function render(): void {
     const preview = runtime.preferences.activeRasterLayerId === layer.id ? runtime.rasterPreview : null;
     renderRasterLayer(canvas, page, layer, preview);
   });
+  const selectionCanvas = document.querySelector<HTMLCanvasElement>("[data-pixel-selection-canvas]");
+  const selection = runtime.pixelSelection;
+  const selectionContext = selectionCanvas?.getContext("2d");
+  if (selectionCanvas && selectionContext && selection?.mode === "pixels") {
+    selectionContext.clearRect(0, 0, selectionCanvas.width, selectionCanvas.height);
+    selectionContext.fillStyle = "rgba(99,230,255,.22)";
+    for (const span of selection.spans ?? []) selectionContext.fillRect(span.x, span.y, span.width, 1);
+    selectionContext.strokeStyle = "#63e6ff";
+    selectionContext.setLineDash([5, 4]);
+    selectionContext.strokeRect(selection.x + 0.5, selection.y + 0.5, Math.max(1, selection.width - 1), Math.max(1, selection.height - 1));
+  }
 }
 
 function activeRasterCanvas(): HTMLCanvasElement | null {
@@ -671,8 +684,36 @@ function beginPixelSelection(event: PointerEvent, mode: PixelSelectionShape["mod
   window.addEventListener("pointerup", end, { once: true });
 }
 
+function applyContiguousPixelSelection(event: PointerEvent, tool: Tool): void {
+  const page = activePage();
+  const preferred = activeRasterCanvas();
+  const preferredLayer = page.rasterLayers.find((layer) => layer.id === preferred?.dataset.rasterLayerId);
+  const canvas = preferred && !preferredLayer?.hidden
+    ? preferred
+    : [...document.querySelectorAll<HTMLCanvasElement>("[data-raster-layer-id]")].reverse().find((candidate) => !page.rasterLayers.find((layer) => layer.id === candidate.dataset.rasterLayerId)?.hidden);
+  const context = canvas?.getContext("2d", { willReadFrequently: true });
+  if (!canvas || !context) {
+    showToast("Magic Wand ต้องใช้ Raster layer ที่มองเห็นได้", "default");
+    return;
+  }
+  try {
+    const point = pagePoint(event);
+    const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
+    const selection = buildContiguousPixelSelection(pixels, canvas.width, canvas.height, point.x, point.y, tool === toolId("quick-selection") ? 48 : 24);
+    if (!selection) {
+      showToast("พื้นที่ใหญ่เกิน guardrail หรือไม่พบสีที่เลือก", "danger");
+      return;
+    }
+    runtime.pixelSelection = selection;
+    render();
+    showToast(`เลือกพื้นที่สี ${selection.width}×${selection.height}px แล้ว`, "success");
+  } catch (error) {
+    showToast(error instanceof Error ? error.message : "อ่าน pixels สำหรับ Selection ไม่สำเร็จ", "danger");
+  }
+}
+
 function beginRasterStroke(event: PointerEvent, tool: Tool): void {
-  if (tool === toolId("lasso-fill") && !runtime.pixelSelection) {
+  if (["lasso-fill", "enclose-fill", "close-fill"].includes(tool as string) && !runtime.pixelSelection) {
     showToast("ใช้ Lasso หรือ Marquee เลือกพื้นที่ก่อนเติมสี", "danger");
     return;
   }
@@ -783,9 +824,18 @@ function applyCanvasTool(event: PointerEvent, tool: Tool): boolean {
     }
     const point = pagePoint(event);
     transact(() => {
-      element.tailX = clamp(point.x - element.x, 0, element.width);
-      element.tailY = clamp(point.y - element.y, 0, element.height * 1.6);
-      element.tails = [{ id: element.tails[0]?.id ?? `tail_${Date.now()}`, x: element.tailX, y: element.tailY }];
+      const x = clamp(point.x - element.x, 0, element.width);
+      const y = clamp(point.y - element.y, 0, element.height * 1.6);
+      const nearest = event.shiftKey ? null : element.tails.reduce<{ id: string; distance: number } | null>((best, tail) => {
+        const distance = Math.hypot(tail.x - x, tail.y - y);
+        return !best || distance < best.distance ? { id: tail.id, distance } : best;
+      }, null);
+      if (nearest) {
+        const tail = element.tails.find((candidate) => candidate.id === nearest.id);
+        if (tail) { tail.x = x; tail.y = y; }
+      } else element.tails.push({ id: `tail_${Date.now()}_${element.tails.length}`, x, y });
+      element.tailX = element.tails[0]?.x ?? x;
+      element.tailY = element.tails[0]?.y ?? y;
     });
     render();
     return true;
@@ -798,6 +848,14 @@ function applyCanvasTool(event: PointerEvent, tool: Tool): boolean {
       transact(() => { element.x = point.x; element.y = point.y; });
     }
     render();
+    return true;
+  }
+  if (id === "panel-cutter" || id === "divide-frame") {
+    const result = splitPanelAtPoint(pagePoint(event), id === "divide-frame", event.shiftKey);
+    if (result) {
+      render();
+      showToast("ตัด Panel เป็นสองช่องแล้ว", "success");
+    } else showToast("เลือกหรือคลิก Panel ที่ต้องการตัด", "default");
     return true;
   }
   if (id === "flip") {
@@ -1011,6 +1069,18 @@ async function handleAction(action: string): Promise<void> {
   if (action === "add-panel") return runMutation(addPanel, "เพิ่มช่องใหม่แล้ว");
   if (action === "add-text") return runMutation(() => addTextElement(false), "เพิ่มข้อความแล้ว");
   if (action === "add-title") return runMutation(() => addTextElement(true), "เพิ่มหัวเรื่องแล้ว");
+  if (action === "save-text-style") {
+    const styleId = saveSelectedTextStyle();
+    if (styleId) rerender("บันทึก Text style แล้ว");
+    else showToast("เลือกข้อความหรือบอลลูนก่อนบันทึกสไตล์", "default");
+    return;
+  }
+  if (action === "add-bubble-tail") {
+    const tailId = addBubbleTail();
+    if (tailId) rerender("เพิ่มหางบอลลูนแล้ว");
+    else showToast("เลือกบอลลูนก่อนเพิ่มหาง", "default");
+    return;
+  }
   if (action === "duplicate-element") return runMutation(duplicateSelected, "ทำสำเนาแล้ว");
   if (action === "delete-element") return runMutation(deleteSelected, "ลบองค์ประกอบแล้ว");
   if (action === "toggle-lock") return runMutation(toggleSelectedLock, "เปลี่ยนสถานะล็อกแล้ว");
@@ -1086,6 +1156,24 @@ appRoot.addEventListener("click", (event) => {
   if (action) {
     event.preventDefault();
     void handleAction(action);
+    return;
+  }
+
+  const textStyleId = target.closest<HTMLElement>("[data-apply-text-style]")?.dataset.applyTextStyle;
+  if (textStyleId) {
+    if (applyTextStylePreset(textStyleId)) rerender("ใช้ Text style แล้ว");
+    return;
+  }
+
+  const removeStyleId = target.closest<HTMLElement>("[data-remove-text-style]")?.dataset.removeTextStyle;
+  if (removeStyleId) {
+    if (removeTextStylePreset(removeStyleId)) rerender("ลบ Text style แล้ว");
+    return;
+  }
+
+  const removeTailId = target.closest<HTMLElement>("[data-remove-bubble-tail]")?.dataset.removeBubbleTail;
+  if (removeTailId) {
+    if (removeBubbleTail(removeTailId)) rerender("ลบหางบอลลูนแล้ว");
     return;
   }
 
@@ -1448,6 +1536,11 @@ appRoot.addEventListener("pointerdown", (event) => {
   }
 
   const activeTool = runtime.preferences.tool;
+  if ((activeTool === toolId("magic-wand") || activeTool === toolId("quick-selection")) && target.closest("[data-page-canvas]")) {
+    event.preventDefault();
+    applyContiguousPixelSelection(event, activeTool);
+    return;
+  }
   if (activeTool === toolId("rotate-canvas") && target.closest("[data-page-canvas]")) {
     event.preventDefault();
     beginCanvasRotation(event);

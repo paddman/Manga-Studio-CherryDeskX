@@ -12,6 +12,7 @@ import type {
   RasterPoint,
   RasterStroke,
   TextElement,
+  TextStylePreset,
 } from "../types";
 import { PROJECT_SCHEMA_VERSION } from "../types";
 
@@ -67,6 +68,30 @@ function normalizeAsset(value: unknown, index: number): MangaAsset {
     width: numberValue(source.width, 0),
     height: numberValue(source.height, 0),
     createdAt: stringValue(source.createdAt, new Date(0).toISOString()),
+  };
+}
+
+function normalizeTextStyle(value: unknown, index: number): TextStylePreset | null {
+  if (!isRecord(value) || (value.kind !== "text" && value.kind !== "bubble")) return null;
+  return {
+    id: stringValue(value.id, `text_style_${index}`),
+    name: stringValue(value.name, `สไตล์ ${index + 1}`),
+    kind: value.kind,
+    fontFamily: fontFamilyValue(value.fontFamily),
+    fontSize: Math.max(8, numberValue(value.fontSize, 30)),
+    fontWeight: Math.max(100, Math.min(1000, numberValue(value.fontWeight, 700))),
+    color: colorValue(value.color, "#17131f"),
+    align: value.align === "left" || value.align === "right" ? value.align : "center",
+    lineHeight: Math.max(0.6, Math.min(3, numberValue(value.lineHeight, 1.25))),
+    letterSpacing: Math.max(-10, Math.min(40, numberValue(value.letterSpacing, 0))),
+    writingMode: value.writingMode === "vertical" ? "vertical" : "horizontal",
+    outlineColor: colorValue(value.outlineColor, "#000000"),
+    outlineWidth: Math.max(0, Math.min(20, numberValue(value.outlineWidth, 0))),
+    shadowColor: colorValue(value.shadowColor, "#000000"),
+    shadowBlur: Math.max(0, Math.min(60, numberValue(value.shadowBlur, 0))),
+    background: typeof value.background === "string" ? colorValue(value.background, "#ffffff") : undefined,
+    borderColor: typeof value.borderColor === "string" ? colorValue(value.borderColor, "#17131f") : undefined,
+    borderWidth: typeof value.borderWidth === "number" ? Math.max(0, Math.min(30, value.borderWidth)) : undefined,
   };
 }
 
@@ -157,6 +182,7 @@ function normalizeElement(value: unknown, index: number, assets: MangaAsset[]): 
       outlineWidth: numberValue(source.outlineWidth, 0),
       shadowColor: colorValue(source.shadowColor, "#000000"),
       shadowBlur: numberValue(source.shadowBlur, 0),
+      autoFit: booleanValue(source.autoFit, false),
     } satisfies TextElement;
   }
   if (kind === "bubble") {
@@ -173,7 +199,7 @@ function normalizeElement(value: unknown, index: number, assets: MangaAsset[]): 
       ...baseElement(source, "bubble", index),
       kind: "bubble",
       text: stringValue(source.text, "พิมพ์บทพูดตรงนี้"),
-      variant: source.variant === "thought" || source.variant === "shout" || source.variant === "caption" ? source.variant : "speech",
+      variant: source.variant === "thought" || source.variant === "shout" || source.variant === "whisper" || source.variant === "caption" || source.variant === "narration" ? source.variant : "speech",
       background: colorValue(source.background, "#ffffff"),
       color: colorValue(source.color, "#17131f"),
       borderColor: colorValue(source.borderColor, "#17131f"),
@@ -181,6 +207,15 @@ function normalizeElement(value: unknown, index: number, assets: MangaAsset[]): 
       fontSize: numberValue(source.fontSize, 25),
       fontWeight: numberValue(source.fontWeight, 750),
       align: source.align === "left" || source.align === "right" ? source.align : "center",
+      fontFamily: fontFamilyValue(source.fontFamily),
+      lineHeight: Math.max(0.6, Math.min(3, numberValue(source.lineHeight, 1.26))),
+      letterSpacing: Math.max(-10, Math.min(40, numberValue(source.letterSpacing, 0))),
+      writingMode: source.writingMode === "vertical" ? "vertical" : "horizontal",
+      outlineColor: colorValue(source.outlineColor, "#000000"),
+      outlineWidth: Math.max(0, Math.min(20, numberValue(source.outlineWidth, 0))),
+      shadowColor: colorValue(source.shadowColor, "#000000"),
+      shadowBlur: Math.max(0, Math.min(60, numberValue(source.shadowBlur, 0))),
+      autoFit: booleanValue(source.autoFit, true),
       tailX,
       tailY,
       tails: tails.length ? tails : [{ id: `tail_${index}`, x: tailX, y: tailY }],
@@ -200,8 +235,15 @@ function normalizePoint(value: unknown): RasterPoint | null {
 
 function normalizeSelection(value: unknown): PixelSelectionShape | undefined {
   if (!isRecord(value)) return undefined;
-  const mode = value.mode === "ellipse" || value.mode === "lasso" || value.mode === "polygon" ? value.mode : "rectangle";
+  const mode = value.mode === "ellipse" || value.mode === "lasso" || value.mode === "polygon" || value.mode === "pixels" ? value.mode : "rectangle";
   const points = Array.isArray(value.points) ? value.points.map(normalizePoint).filter((point): point is RasterPoint => point !== null) : [];
+  const spans = mode === "pixels" && Array.isArray(value.spans)
+    ? value.spans.filter(isRecord).map((span) => ({
+        x: Math.max(0, Math.floor(numberValue(span.x, 0))),
+        y: Math.max(0, Math.floor(numberValue(span.y, 0))),
+        width: Math.max(1, Math.floor(numberValue(span.width, 1))),
+      })).slice(0, 8_000_000).sort((a, b) => a.y - b.y || a.x - b.x)
+    : undefined;
   return {
     mode,
     points,
@@ -209,6 +251,7 @@ function normalizeSelection(value: unknown): PixelSelectionShape | undefined {
     y: numberValue(value.y, 0),
     width: Math.max(0, numberValue(value.width, 0)),
     height: Math.max(0, numberValue(value.height, 0)),
+    spans,
   };
 }
 
@@ -293,6 +336,7 @@ export function migrateProject(input: unknown): MangaProject {
   const fallback = createStarterProject();
   if (!isRecord(input)) return fallback;
   const assets = Array.isArray(input.assets) ? input.assets.map(normalizeAsset) : [];
+  const textStyles = Array.isArray(input.textStyles) ? input.textStyles.map(normalizeTextStyle).filter((style): style is TextStylePreset => style !== null) : [];
   const volumeId = stringValue(input.activeVolumeId, `volume_migrated_0`);
   const chapterId = stringValue(input.activeChapterId, `chapter_migrated_0`);
   const rawPages = Array.isArray(input.pages) ? input.pages : [];
@@ -337,6 +381,7 @@ export function migrateProject(input: unknown): MangaProject {
     chapters,
     pages,
     assets,
+    textStyles,
     createdAt: stringValue(input.createdAt, fallback.createdAt),
     updatedAt: stringValue(input.updatedAt, fallback.updatedAt),
   };

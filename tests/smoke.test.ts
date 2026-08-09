@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { renderApp } from "../src/editor/view";
 import { addRasterLayer, selectRasterLayer } from "../src/editor/raster-actions";
-import { runtime } from "../src/editor/state";
+import { runtime, setSelection } from "../src/editor/state";
 import { createStarterProject } from "../src/sample";
 
 describe("editor smoke render", () => {
@@ -27,5 +27,18 @@ describe("editor smoke render", () => {
     expect(html).toContain(`data-raster-layer-id="${layer.id}"`);
     expect(html).toContain("data-raster-alpha-lock");
     expect(html).toContain("data-action=\"bring-forward\"");
+  });
+
+  it("renders production lettering controls for a selected balloon", () => {
+    runtime.project = createStarterProject();
+    const bubble = runtime.project.pages[0]!.elements.find((element) => element.kind === "bubble");
+    if (!bubble) throw new Error("starter bubble missing");
+    setSelection([bubble.id]);
+    const html = renderApp();
+    expect(html).toContain("data-element-prop=\"autoFit\"");
+    expect(html).toContain("data-action=\"add-bubble-tail\"");
+    expect(html).toContain("data-action=\"save-text-style\"");
+    expect(html).toContain("value=\"whisper\"");
+    expect(html).toContain("value=\"narration\"");
   });
 });

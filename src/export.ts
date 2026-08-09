@@ -12,6 +12,7 @@ import type {
 } from "./types";
 import { renderRasterLayer } from "./editor/raster";
 import { isRasterLayer, orderedPageLayers } from "./editor/layers";
+import { fittedFontSize } from "./editor/typography";
 
 export type ExportFormat = ProjectExportFormat;
 export type ExportScope = ProjectExportScope;
@@ -161,6 +162,7 @@ function wrapText(
   ctx: CanvasRenderingContext2D,
   text: string,
   maxWidth: number,
+  letterSpacing = 0,
 ): string[] {
   const paragraphs = text.split("\n");
   const lines: string[] = [];
@@ -175,7 +177,8 @@ function wrapText(
     let line = "";
     for (const segment of segments) {
       const candidate = `${line}${segment}`;
-      if (line && ctx.measureText(candidate).width > maxWidth) {
+      const measuredWidth = ctx.measureText(candidate).width + Math.max(0, [...candidate].length - 1) * letterSpacing;
+      if (line && measuredWidth > maxWidth) {
         lines.push(line.trimEnd());
         line = segment.trimStart();
       } else {
@@ -186,6 +189,26 @@ function wrapText(
   }
 
   return lines;
+}
+
+function drawTextLine(ctx: CanvasRenderingContext2D, line: string, x: number, y: number, letterSpacing: number, outlineWidth: number): void {
+  if (!letterSpacing) {
+    if (outlineWidth > 0) ctx.strokeText(line, x, y);
+    ctx.fillText(line, x, y);
+    return;
+  }
+  const graphemes = [...line];
+  const widths = graphemes.map((grapheme) => ctx.measureText(grapheme).width);
+  const totalWidth = widths.reduce((total, width) => total + width, 0) + Math.max(0, graphemes.length - 1) * letterSpacing;
+  let cursor = ctx.textAlign === "center" ? x - totalWidth / 2 : ctx.textAlign === "right" ? x - totalWidth : x;
+  const previousAlign = ctx.textAlign;
+  ctx.textAlign = "left";
+  graphemes.forEach((grapheme, index) => {
+    if (outlineWidth > 0) ctx.strokeText(grapheme, cursor, y);
+    ctx.fillText(grapheme, cursor, y);
+    cursor += (widths[index] ?? 0) + letterSpacing;
+  });
+  ctx.textAlign = previousAlign;
 }
 
 function alignX(align: TextAlign, width: number, padding: number): number {
@@ -233,6 +256,7 @@ function drawTextBlock(
     outlineWidth = 0,
     shadowColor = "transparent",
     shadowBlur = 0,
+    letterSpacing = 0,
   } = options;
 
   ctx.fillStyle = color;
@@ -244,7 +268,7 @@ function drawTextBlock(
   ctx.font = `${fontWeight} ${fontSize}px ${fontFamily}`;
   if (writingMode === "vertical") {
     const columns = text.split("\n");
-    const step = fontSize * lineHeight;
+    const step = fontSize * lineHeight + letterSpacing;
     let x = width - padding - fontSize / 2;
     ctx.textAlign = "center";
     ctx.textBaseline = "top";
@@ -268,15 +292,14 @@ function drawTextBlock(
   }
   ctx.textAlign = align;
   ctx.textBaseline = "top";
-  const lines = wrapText(ctx, text, Math.max(12, width - padding * 2));
+  const lines = wrapText(ctx, text, Math.max(12, width - padding * 2), letterSpacing);
   const step = fontSize * lineHeight;
   const totalHeight = lines.length * step;
   let y = verticalCenter ? Math.max(padding, (height - totalHeight) / 2) : padding;
   const x = alignX(align, width, padding);
 
   for (const line of lines) {
-    if (outlineWidth > 0) ctx.strokeText(line, x, y, Math.max(12, width - padding * 2));
-    ctx.fillText(line, x, y, Math.max(12, width - padding * 2));
+    drawTextLine(ctx, line, x, y, letterSpacing, outlineWidth);
     y += step;
     if (y > height - padding) break;
   }
@@ -285,11 +308,12 @@ function drawTextBlock(
 }
 
 function drawTextElement(ctx: CanvasRenderingContext2D, element: TextElement): void {
+  const fontSize = element.autoFit ? fittedFontSize({ ...element, padding: 4 }) : element.fontSize;
   drawTextBlock(ctx, {
     text: element.text,
     width: element.width,
     height: element.height,
-    fontSize: element.fontSize,
+    fontSize,
     fontWeight: element.fontWeight,
     fontFamily: element.fontFamily,
     color: element.color,
@@ -329,12 +353,13 @@ function drawBubbleElement(ctx: CanvasRenderingContext2D, element: BubbleElement
   ctx.strokeStyle = element.borderColor;
   ctx.lineWidth = borderWidth;
   ctx.lineJoin = "round";
+  ctx.setLineDash(variant === "whisper" ? [Math.max(4, borderWidth * 2), Math.max(3, borderWidth)] : []);
 
   if (variant === "shout") {
     drawShoutShape(ctx, width, height);
     ctx.fill();
     if (borderWidth > 0) ctx.stroke();
-  } else if (variant === "caption") {
+  } else if (variant === "caption" || variant === "narration") {
     roundedRect(ctx, 0, 0, width, height, 10);
     ctx.fill();
     if (borderWidth > 0) ctx.stroke();
@@ -349,10 +374,14 @@ function drawBubbleElement(ctx: CanvasRenderingContext2D, element: BubbleElement
       ctx.arc(width * 0.78, height * 0.91, Math.max(4, height * 0.04), 0, Math.PI * 2);
       ctx.fill();
       if (borderWidth > 0) ctx.stroke();
-    } else {
+    }
+  }
+
+  if (variant === "speech" || variant === "whisper" || variant === "shout") {
+    for (const tail of element.tails) {
       ctx.beginPath();
       ctx.moveTo(width * 0.64, height * 0.76);
-      ctx.lineTo(Math.min(width, element.tailX), Math.min(height, element.tailY));
+      ctx.lineTo(Math.min(width, Math.max(0, tail.x)), Math.min(height * 1.6, Math.max(0, tail.y)));
       ctx.lineTo(width * 0.78, height * 0.73);
       ctx.closePath();
       ctx.fill();
@@ -360,18 +389,28 @@ function drawBubbleElement(ctx: CanvasRenderingContext2D, element: BubbleElement
     }
   }
 
+  ctx.setLineDash([]);
+  const textHeight = variant === "caption" || variant === "narration" ? height : height * 0.82;
+  const padding = Math.max(12, element.fontSize * 0.65);
+  const fontSize = element.autoFit ? fittedFontSize({ ...element, height: textHeight, padding }) : element.fontSize;
   drawTextBlock(ctx, {
     text: element.text,
     width,
-    height: variant === "caption" ? height : height * 0.82,
-    fontSize: element.fontSize,
+    height: textHeight,
+    fontSize,
     fontWeight: element.fontWeight,
-    fontFamily: "system-ui, sans-serif",
+    fontFamily: element.fontFamily,
     color: element.color,
     align: element.align,
-    lineHeight: 1.26,
-    padding: Math.max(12, element.fontSize * 0.65),
+    lineHeight: element.lineHeight,
+    padding,
+    letterSpacing: element.letterSpacing,
     verticalCenter: true,
+    writingMode: element.writingMode,
+    outlineColor: element.outlineColor,
+    outlineWidth: element.outlineWidth,
+    shadowColor: element.shadowColor,
+    shadowBlur: element.shadowBlur,
   });
 }
 

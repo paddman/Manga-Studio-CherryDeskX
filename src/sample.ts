@@ -205,6 +205,7 @@ export function createText(
     outlineWidth: 0,
     shadowColor: "#000000",
     shadowBlur: 0,
+    autoFit: false,
   };
 }
 
@@ -241,6 +242,15 @@ export function createBubble(
     fontSize: 25,
     fontWeight: 750,
     align: "center",
+    fontFamily: "system-ui, sans-serif",
+    lineHeight: 1.26,
+    letterSpacing: 0,
+    writingMode: "horizontal",
+    outlineColor: "#000000",
+    outlineWidth: 0,
+    shadowColor: "#000000",
+    shadowBlur: 0,
+    autoFit: true,
     tailX: 72,
     tailY: 114,
     tails: [{ id: uid("tail"), x: 72, y: 114 }],
@@ -340,7 +350,7 @@ export function createStarterProject(): MangaProject {
   return {
     id: uid("project"),
     name: "NULL ARK — เล่ม 1",
-    schemaVersion: 4,
+    schemaVersion: 5,
     readingDirection: "rtl",
     pagePreset: "manga-b5",
     dpi: 300,
@@ -356,6 +366,7 @@ export function createStarterProject(): MangaProject {
     chapters: [{ id: chapterId, volumeId, name: "บทที่ 1 — สัญญาณแรก", pageIds: [page1.id, page2.id], order: 0 }],
     pages: [page1, page2],
     assets,
+    textStyles: [],
     createdAt: now,
     updatedAt: now,
   };

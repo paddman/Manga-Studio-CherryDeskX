@@ -17,7 +17,7 @@ describe("project persistence", () => {
     };
     const project = migrateProject(legacy);
     const json = JSON.stringify(serializeProject(project));
-    expect(project.schemaVersion).toBe(4);
+    expect(project.schemaVersion).toBe(5);
     expect(project.pages[0]?.rasterLayers).toEqual([]);
     expect(project.pages[0]?.elements[0]?.kind).toBe("image");
     expect(project.pages[0]?.elements[0]?.skewX).toBe(0);
@@ -62,9 +62,9 @@ describe("project persistence", () => {
     expect(markerOffset).toBeGreaterThan(-1);
     bytes[markerOffset + marker.length - 1] = "9".charCodeAt(0);
     await expect(importProjectBundle(new Blob([bytes]))).rejects.toThrow("checksum");
-    expect(() => assertSupportedProjectSchema({ schemaVersion: 99, pages: [{}] })).toThrow("รองรับถึง version 4");
+    expect(() => assertSupportedProjectSchema({ schemaVersion: 99, pages: [{}] })).toThrow("รองรับถึง version 5");
     expect(() => assertSupportedProjectSchema({ schemaVersion: "3", pages: [{}] })).toThrow("schemaVersion");
-    expect(() => assertSupportedProjectSchema({ schemaVersion: 4 })).toThrow("ไม่มีหน้ามังงะ");
+    expect(() => assertSupportedProjectSchema({ schemaVersion: 5 })).toThrow("ไม่มีหน้ามังงะ");
   });
 
   it("accepts a real PNG file without relying on its browser MIME value", async () => {
@@ -103,5 +103,46 @@ describe("project persistence", () => {
     expect(imported.project.pages[0]?.rasterLayers[0]?.mask?.selection.mode).toBe("ellipse");
     expect(imported.project.pages[0]?.rasterLayers[0]?.strokes[0]?.preserveAlpha).toBe(true);
     expect(await imported.rasters.get(layer.bitmapKey)?.text()).toBe("raster-png");
+  });
+
+  it("migrates exact pixel-span selections without widening them into a rectangle", () => {
+    const project = createStarterProject();
+    const page = project.pages[0]!;
+    page.rasterLayers.push({
+      id: "pixel-mask",
+      kind: "raster",
+      name: "Pixel mask",
+      width: page.width,
+      height: page.height,
+      opacity: 1,
+      hidden: false,
+      locked: false,
+      alphaLock: false,
+      blendMode: "source-over",
+      strokes: [],
+      mask: { enabled: true, inverted: false, selection: { mode: "pixels", points: [{ x: 4, y: 8, pressure: 1 }], x: 4, y: 8, width: 7, height: 2, spans: [{ x: 4, y: 8, width: 2 }, { x: 9, y: 9, width: 2 }] } },
+    });
+    const migrated = migrateProject(serializeProject(project));
+    expect(migrated.pages[0]?.rasterLayers[0]?.mask?.selection).toMatchObject({
+      mode: "pixels",
+      spans: [{ x: 4, y: 8, width: 2 }, { x: 9, y: 9, width: 2 }],
+    });
+  });
+
+  it("migrates typography v5 fields and saved style presets", () => {
+    const project = createStarterProject();
+    const bubble = project.pages[0]!.elements.find((element) => element.kind === "bubble");
+    if (!bubble || bubble.kind !== "bubble") throw new Error("starter bubble missing");
+    bubble.variant = "whisper";
+    bubble.fontFamily = "Noto Sans Thai, sans-serif";
+    bubble.autoFit = true;
+    bubble.tails.push({ id: "tail-extra", x: 30, y: 160 });
+    project.textStyles.push({ id: "style-1", name: "กระซิบ", kind: "bubble", fontFamily: bubble.fontFamily, fontSize: 28, fontWeight: 700, color: "#17131f", align: "center", lineHeight: 1.3, letterSpacing: 1, writingMode: "horizontal", outlineColor: "#000000", outlineWidth: 1, shadowColor: "#000000", shadowBlur: 2, background: "#ffffff", borderColor: "#17131f", borderWidth: 4 });
+    const migrated = migrateProject(serializeProject(project));
+    const migratedBubble = migrated.pages[0]!.elements.find((element) => element.id === bubble.id);
+    expect(migrated.schemaVersion).toBe(5);
+    expect(migratedBubble).toMatchObject({ variant: "whisper", fontFamily: "Noto Sans Thai, sans-serif", autoFit: true });
+    expect(migratedBubble?.kind === "bubble" ? migratedBubble.tails : []).toHaveLength(2);
+    expect(migrated.textStyles[0]).toMatchObject({ id: "style-1", kind: "bubble", background: "#ffffff" });
   });
 });
