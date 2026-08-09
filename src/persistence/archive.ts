@@ -1,10 +1,11 @@
 import { migrateProject, serializeProject } from "./serialization";
 import type { MangaProject } from "../types";
-import type { AssetRepository } from "./repository";
+import type { AssetRepository, RasterRepository } from "./repository";
 
 export interface ImportedProjectBundle {
   project: MangaProject;
   assets: Map<string, Blob>;
+  rasters: Map<string, Blob>;
 }
 
 interface ArchiveEntry {
@@ -66,12 +67,21 @@ function zipStore(entries: ArchiveEntry[]): Blob {
   return new Blob([localBytes, centralBytes, end], { type: "application/octet-stream" });
 }
 
-export async function exportProjectBundle(project: MangaProject, assets: AssetRepository): Promise<Blob> {
+export async function exportProjectBundle(project: MangaProject, assets: AssetRepository, rasters?: RasterRepository): Promise<Blob> {
   const entries: ArchiveEntry[] = [{ name: "project.json", data: new TextEncoder().encode(JSON.stringify(serializeProject(project), null, 2)) }];
   for (const asset of project.assets) {
     const blob = await assets.get(asset.id);
     if (!blob) continue;
     entries.push({ name: `assets/${asset.id}`, data: new Uint8Array(await blob.arrayBuffer()) });
+  }
+  if (rasters) {
+    for (const page of project.pages) {
+      for (const layer of page.rasterLayers) {
+        if (!layer.bitmapKey) continue;
+        const blob = await rasters.get(layer.bitmapKey);
+        if (blob) entries.push({ name: `rasters/${layer.bitmapKey}`, data: new Uint8Array(await blob.arrayBuffer()) });
+      }
+    }
   }
   return zipStore(entries);
 }
@@ -118,5 +128,13 @@ export async function importProjectBundle(file: Blob): Promise<ImportedProjectBu
     const data = files.get(`assets/${asset.id}`);
     if (data) assets.set(asset.id, new Blob([data], { type: asset.mimeType }));
   }
-  return { project, assets };
+  const rasters = new Map<string, Blob>();
+  for (const page of project.pages) {
+    for (const layer of page.rasterLayers) {
+      if (!layer.bitmapKey) continue;
+      const data = files.get(`rasters/${layer.bitmapKey}`);
+      if (data) rasters.set(layer.bitmapKey, new Blob([data], { type: "image/png" }));
+    }
+  }
+  return { project, assets, rasters };
 }

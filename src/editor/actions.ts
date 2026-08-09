@@ -229,6 +229,8 @@ export function addPage(): void {
       height: PAGE_HEIGHT,
       background: "#f7f5fb",
       elements: [],
+      rasterLayers: [],
+      layerOrder: [],
       volumeId: volume.id,
       chapterId: chapter.id,
       order: chapter.pageIds.length,
@@ -254,6 +256,13 @@ export function duplicatePage(): void {
       ids.set(element.id, nextId);
       return { ...element, id: nextId, parentId: element.parentId ? ids.get(element.parentId) : undefined };
     }) as MangaElement[];
+    const rasterIds = new Map<string, string>();
+    clone.rasterLayers = clone.rasterLayers.map((layer) => {
+      const nextId = uid("raster");
+      rasterIds.set(layer.id, nextId);
+      return { ...layer, id: nextId, bitmapKey: undefined, strokes: layer.strokes.map((stroke) => ({ ...stroke, id: uid("stroke") })) };
+    });
+    clone.layerOrder = clone.layerOrder.map((id) => ids.get(id) ?? rasterIds.get(id) ?? id);
     const index = runtime.project.pages.findIndex((item) => item.id === page.id);
     runtime.project.pages.splice(index + 1, 0, clone);
     const chapter = runtime.project.chapters.find((item) => item.id === clone.chapterId);

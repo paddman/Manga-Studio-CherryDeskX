@@ -275,6 +275,8 @@ export function createStarterProject(): MangaProject {
       createBubble("หนึ่งวินาทีก่อน...\nตรงนั้นยังว่างเปล่า", 470, 390, 235, 132),
       createBubble("นั่นมัน...อะไรกัน?", 96, 760, 238, 136),
     ],
+    rasterLayers: [],
+    layerOrder: [],
   };
 
   const caption = createBubble("NULL ARK ปรากฏใกล้วงโคจรของดาวพุธ", 96, 92, 600, 130);
@@ -301,12 +303,14 @@ export function createStarterProject(): MangaProject {
       caption,
       createBubble("ไม่มีความร้อน\nไม่มีคลื่นวิทยุ\nไม่มีร่องรอยการเดินทาง", 420, 856, 270, 170),
     ],
+    rasterLayers: [],
+    layerOrder: [],
   };
 
   return {
     id: uid("project"),
     name: "NULL ARK — เล่ม 1",
-    schemaVersion: 2,
+    schemaVersion: 3,
     readingDirection: "rtl",
     pagePreset: "manga-b5",
     dpi: 300,

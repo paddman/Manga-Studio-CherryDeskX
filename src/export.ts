@@ -7,6 +7,7 @@ import type {
   TextElement,
   MangaProject,
 } from "./types";
+import { renderRasterLayers } from "./editor/raster";
 
 export type ExportFormat = "png" | "jpg" | "pdf" | "cbz" | "zip" | "webtoon";
 export type ExportScope = "page" | "chapter" | "volume" | "project";
@@ -353,6 +354,12 @@ export async function renderPageBlob(page: MangaPage, scale = 2, mimeType: "imag
   ctx.scale(scale, scale);
   ctx.fillStyle = page.background;
   ctx.fillRect(0, 0, page.width, page.height);
+
+  if (page.rasterLayers.length) {
+    const rasterCanvas = document.createElement("canvas");
+    renderRasterLayers(rasterCanvas, page);
+    ctx.drawImage(rasterCanvas, 0, 0, page.width, page.height);
+  }
 
   for (const element of page.elements) {
     if (element.parentId) continue;

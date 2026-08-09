@@ -7,6 +7,10 @@ import type {
   MangaPage,
   MangaProject,
   PanelElement,
+  PixelSelectionShape,
+  RasterLayer,
+  RasterPoint,
+  RasterStroke,
   TextElement,
 } from "../types";
 import { PROJECT_SCHEMA_VERSION } from "../types";
@@ -170,18 +174,94 @@ function normalizeElement(value: unknown, index: number, assets: MangaAsset[]): 
   return null;
 }
 
+function normalizePoint(value: unknown): RasterPoint | null {
+  if (!isRecord(value)) return null;
+  return {
+    x: numberValue(value.x, 0),
+    y: numberValue(value.y, 0),
+    pressure: Math.min(1, Math.max(0.05, numberValue(value.pressure, 1))),
+  };
+}
+
+function normalizeSelection(value: unknown): PixelSelectionShape | undefined {
+  if (!isRecord(value)) return undefined;
+  const mode = value.mode === "ellipse" || value.mode === "lasso" || value.mode === "polygon" ? value.mode : "rectangle";
+  const points = Array.isArray(value.points) ? value.points.map(normalizePoint).filter((point): point is RasterPoint => point !== null) : [];
+  return {
+    mode,
+    points,
+    x: numberValue(value.x, 0),
+    y: numberValue(value.y, 0),
+    width: Math.max(0, numberValue(value.width, 0)),
+    height: Math.max(0, numberValue(value.height, 0)),
+  };
+}
+
+function normalizeStroke(value: unknown, index: number): RasterStroke | null {
+  if (!isRecord(value)) return null;
+  const kind = value.kind === "line" || value.kind === "rectangle" || value.kind === "ellipse" || value.kind === "polygon" || value.kind === "fill" || value.kind === "gradient"
+    ? value.kind
+    : "stroke";
+  const blendMode = value.blendMode === "destination-out" || value.blendMode === "multiply" || value.blendMode === "screen" || value.blendMode === "overlay"
+    ? value.blendMode
+    : "source-over";
+  return {
+    id: stringValue(value.id, `stroke_migrated_${index}`),
+    kind,
+    preset: stringValue(value.preset, "brush"),
+    points: Array.isArray(value.points) ? value.points.map(normalizePoint).filter((point): point is RasterPoint => point !== null) : [],
+    color: stringValue(value.color, "#17131f"),
+    size: Math.max(1, numberValue(value.size, 12)),
+    opacity: Math.min(1, Math.max(0, numberValue(value.opacity, 1))),
+    blendMode,
+    rotation: numberValue(value.rotation, 0),
+    selection: normalizeSelection(value.selection),
+  };
+}
+
+function normalizeRasterLayer(value: unknown, index: number, pageWidth: number, pageHeight: number): RasterLayer | null {
+  if (!isRecord(value)) return null;
+  const strokes = Array.isArray(value.strokes)
+    ? value.strokes.map(normalizeStroke).filter((stroke): stroke is RasterStroke => stroke !== null)
+    : [];
+  return {
+    id: stringValue(value.id, `raster_migrated_${index}`),
+    kind: "raster",
+    name: stringValue(value.name, `Raster ${index + 1}`),
+    width: Math.max(1, numberValue(value.width, pageWidth)),
+    height: Math.max(1, numberValue(value.height, pageHeight)),
+    opacity: Math.min(1, Math.max(0, numberValue(value.opacity, 1))),
+    hidden: booleanValue(value.hidden, false),
+    locked: booleanValue(value.locked, false),
+    alphaLock: booleanValue(value.alphaLock, false),
+    blendMode: value.blendMode === "destination-out" || value.blendMode === "multiply" || value.blendMode === "screen" || value.blendMode === "overlay" ? value.blendMode : "source-over",
+    strokes,
+    bitmapKey: typeof value.bitmapKey === "string" ? value.bitmapKey : undefined,
+  };
+}
+
 function normalizePage(value: unknown, index: number, volumeId: string, chapterId: string, assets: MangaAsset[]): MangaPage {
   const source = isRecord(value) ? value : {};
   const elements = Array.isArray(source.elements)
     ? source.elements.map((element, elementIndex) => normalizeElement(element, elementIndex, assets)).filter((element): element is MangaElement => element !== null)
     : [];
+  const width = Math.max(320, numberValue(source.width, 794));
+  const height = Math.max(320, numberValue(source.height, 1123));
+  const rasterLayers = Array.isArray(source.rasterLayers)
+    ? source.rasterLayers.map((layer, layerIndex) => normalizeRasterLayer(layer, layerIndex, width, height)).filter((layer): layer is RasterLayer => layer !== null)
+    : [];
+  const rawOrder = Array.isArray(source.layerOrder) ? source.layerOrder.filter((id): id is string => typeof id === "string") : [];
+  const availableIds = [...elements.map((element) => element.id), ...rasterLayers.map((layer) => layer.id)];
+  const layerOrder = [...new Set([...rawOrder, ...availableIds])].filter((id) => availableIds.includes(id));
   return {
     id: stringValue(source.id, `page_migrated_${index}`),
     name: stringValue(source.name, `หน้า ${index + 1}`),
-    width: Math.max(320, numberValue(source.width, 794)),
-    height: Math.max(320, numberValue(source.height, 1123)),
+    width,
+    height,
     background: stringValue(source.background, "#f7f5fb"),
     elements,
+    rasterLayers,
+    layerOrder,
     volumeId: stringValue(source.volumeId, volumeId),
     chapterId: stringValue(source.chapterId, chapterId),
     order: numberValue(source.order, index),

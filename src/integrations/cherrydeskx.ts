@@ -30,6 +30,16 @@ export interface ProjectRevision {
   project: PersistedProject;
 }
 
+export interface WorkspaceAsset {
+  assetId: string;
+  workspaceId: string;
+  name: string;
+  mimeType: string;
+  byteSize: number;
+  downloadUrl?: string;
+  createdAt: string;
+}
+
 export type AiJobType = "smart-layout" | "smart-crop" | "bubble-placement" | "inpaint" | "outpaint" | "remove-background" | "upscale" | "script-to-page" | "character-consistency";
 export type AiJobStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled";
 
@@ -56,6 +66,9 @@ export interface CherryDeskXApi {
   listWorkspaces(): Promise<Workspace[]>;
   getProject(projectId: string): Promise<ProjectRevision>;
   saveProject(projectId: string, project: PersistedProject, baseRevisionId?: string): Promise<ProjectRevision>;
+  listAssets(workspaceId: string): Promise<WorkspaceAsset[]>;
+  createAssetUpload(workspaceId: string, metadata: Pick<WorkspaceAsset, "name" | "mimeType" | "byteSize">): Promise<{ assetId: string; uploadUrl: string }>;
+  getAssetDownloadUrl(assetId: string): Promise<string>;
   submitAiJob(request: AiJobRequest): Promise<AiJob>;
   getAiJob(jobId: string): Promise<AiJob>;
   cancelAiJob(jobId: string): Promise<void>;
@@ -139,6 +152,25 @@ export class CherryDeskXHttpApi implements CherryDeskXApi {
     return { revisionId: requireString(value.revisionId, "revisionId"), projectId: requireString(value.projectId, "projectId"), createdAt: requireString(value.createdAt, "createdAt"), createdBy: requireString(value.createdBy, "createdBy"), project: value.project as PersistedProject };
   }
 
+  async listAssets(workspaceId: string): Promise<WorkspaceAsset[]> {
+    const value = await this.request(`/v1/workspaces/${encodeURIComponent(workspaceId)}/assets`);
+    if (!Array.isArray(value)) throw new Error("รายการ asset ไม่ถูกต้อง");
+    return value.map((item) => {
+      const record = requireRecord(item);
+      return { assetId: requireString(record.assetId, "assetId"), workspaceId: requireString(record.workspaceId, "workspaceId"), name: requireString(record.name, "name"), mimeType: requireString(record.mimeType, "mimeType"), byteSize: typeof record.byteSize === "number" ? record.byteSize : 0, downloadUrl: typeof record.downloadUrl === "string" ? record.downloadUrl : undefined, createdAt: requireString(record.createdAt, "createdAt") };
+    });
+  }
+
+  async createAssetUpload(workspaceId: string, metadata: Pick<WorkspaceAsset, "name" | "mimeType" | "byteSize">): Promise<{ assetId: string; uploadUrl: string }> {
+    const value = requireRecord(await this.request(`/v1/workspaces/${encodeURIComponent(workspaceId)}/assets`, { method: "POST", body: JSON.stringify(metadata) }));
+    return { assetId: requireString(value.assetId, "assetId"), uploadUrl: requireString(value.uploadUrl, "uploadUrl") };
+  }
+
+  async getAssetDownloadUrl(assetId: string): Promise<string> {
+    const value = requireRecord(await this.request(`/v1/assets/${encodeURIComponent(assetId)}/download`));
+    return requireString(value.url, "url");
+  }
+
   async submitAiJob(request: AiJobRequest): Promise<AiJob> {
     if (!request.confirmCredits) throw new IntegrationUnavailableError("ต้องยืนยัน credit estimate ก่อนส่ง AI job");
     return parseJob(await this.request("/v1/ai/jobs", { method: "POST", body: JSON.stringify(request) }));
@@ -162,6 +194,9 @@ export class DisabledCherryDeskXApi implements CherryDeskXApi {
   listWorkspaces(): Promise<Workspace[]> { return Promise.reject(this.unavailable()); }
   getProject(_projectId: string): Promise<ProjectRevision> { return Promise.reject(this.unavailable()); }
   saveProject(_projectId: string, _project: PersistedProject, _baseRevisionId?: string): Promise<ProjectRevision> { return Promise.reject(this.unavailable()); }
+  listAssets(_workspaceId: string): Promise<WorkspaceAsset[]> { return Promise.reject(this.unavailable()); }
+  createAssetUpload(_workspaceId: string, _metadata: Pick<WorkspaceAsset, "name" | "mimeType" | "byteSize">): Promise<{ assetId: string; uploadUrl: string }> { return Promise.reject(this.unavailable()); }
+  getAssetDownloadUrl(_assetId: string): Promise<string> { return Promise.reject(this.unavailable()); }
   submitAiJob(_request: AiJobRequest): Promise<AiJob> { return Promise.reject(this.unavailable()); }
   getAiJob(_jobId: string): Promise<AiJob> { return Promise.reject(this.unavailable()); }
   cancelAiJob(_jobId: string): Promise<void> { return Promise.reject(this.unavailable()); }
