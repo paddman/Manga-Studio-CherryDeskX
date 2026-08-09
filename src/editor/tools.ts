@@ -22,6 +22,7 @@ export type ToolEngine =
   | "raster-shape"
   | "raster-retouch"
   | "raster-ruler"
+  | "raster-content-fill"
   | "element-rotate"
   | "element-flip"
   | "element-free-transform"
@@ -144,9 +145,10 @@ const EXPERIMENTAL = new Set([
   "magic-wand", "quick-selection", "magnetic-lasso", "shape-builder", "custom-shape", "gradient-tone", "stream-line", "saturated-line", "perspective-transform", "perspective-ruler", "symmetry-ruler", "sub-view", "compare-view",
   "mixer-brush", "blend", "smudge", "decoration-brush", "pattern-brush", "texture-brush", "focus-line", "speed-line", "effect-line", "background-eraser", "magic-eraser", "skew", "manga-tone", "screentone", "gradient-tone", "tone-scraping",
   "blur", "sharpen", "dodge", "burn", "sponge", "red-eye",
+  "content-aware-fill",
 ]);
 
-const ADAPTERS = new Set(["select-subject", "object-selection", "content-aware-fill", "content-aware-scale", "remove", "spot-healing", "healing-brush", "patch", "frequency-separation", "3d-object", "3d-pose", "3d-camera", "3d-light", "pose-scanner", "hand-scanner", "timeline", "keyframe", "cel", "animation-folder", "onion-skin-animation", "inbetween", "camera-movement", "audio-track", "batch-process", "auto-action"]);
+const ADAPTERS = new Set(["select-subject", "object-selection", "content-aware-scale", "remove", "spot-healing", "healing-brush", "patch", "frequency-separation", "3d-object", "3d-pose", "3d-camera", "3d-light", "pose-scanner", "hand-scanner", "timeline", "keyframe", "cel", "animation-folder", "onion-skin-animation", "inbetween", "camera-movement", "audio-track", "batch-process", "auto-action"]);
 
 const PHASE_TWO = new Set(["vector-eraser", "magic-eraser", "refer-other-layers-fill", "pattern-fill", "bezier-curve", "continuous-curve", "vector-pen", "edit-path", "node", "direct-selection", "path-selection", "add-anchor-point", "delete-anchor-point", "convert-point", "correct-line", "simplify-line", "connect-line", "pinch-vector-line", "adjust-line-width", "redraw-vector-line", "vector-magnet", "distort", "warp", "mesh-transform", "puppet-warp", "liquify", "clone-stamp", "pattern-stamp", "red-eye", "blur", "sharpen", "retouch-smudge", "dodge", "burn", "sponge", "color-wheel", "color-mixer", "gradient-map", "replace-color", "colorize", "type-on-path", "font-preview", "text-warp", "curve-ruler", "figure-ruler", "parallel-line-ruler", "parallel-curve-ruler", "multiple-curve-ruler", "radial-line-ruler", "radial-curve-ruler", "radial-line-ruler", "radial-curve-ruler", "special-ruler", "perspective-crop", "slice", "count", "note", "clipping-mask", "vector-mask", "gradient-mask", "auto-layer-select", "light-table", "onion-skin-reference", "material"]);
 const BRUSH_ENGINES = new Set(["brush", "pencil", "pen", "g-pen", "real-g-pen", "mapping-pen", "turnip-pen", "calligraphy-pen", "marker", "airbrush", "spray", "watercolor-brush", "oil-paint-brush", "gouache-brush", "pastel", "chalk", "charcoal", "crayon", "pixel-brush", "mixer-brush", "blend", "smudge", "decoration-brush", "pattern-brush", "texture-brush", "focus-line", "speed-line", "effect-line"]);
@@ -174,6 +176,7 @@ function engineFor(id: string): ToolEngine | undefined {
   if (SHAPE_ENGINES.has(id)) return "raster-shape";
   if (RETOUCH_ENGINES.has(id)) return "raster-retouch";
   if (id === "straight-ruler" || id === "symmetry-ruler") return "raster-ruler";
+  if (id === "content-aware-fill") return "raster-content-fill";
   if (id === "rotate") return "element-rotate";
   if (id === "flip") return "element-flip";
   if (id === "free-transform") return "element-free-transform";

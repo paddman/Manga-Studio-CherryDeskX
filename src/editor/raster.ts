@@ -3,6 +3,7 @@ import type { MangaPage, PixelSelectionShape, RasterLayer, RasterPoint, RasterSt
 import { isRasterLayer, orderedPageLayers } from "./layers";
 import { applyRetouchPixels, isLocalRetouchPreset } from "./retouch";
 import { mirrorPointAcrossRuler } from "./interactions";
+import { contentAwareFillPixels } from "./content-aware";
 
 export const MAX_RASTER_DIMENSION = 16_384;
 export const MAX_RASTER_PIXELS = 32_000_000;
@@ -435,6 +436,13 @@ function drawSpecialStroke(ctx: CanvasRenderingContext2D, stroke: RasterStroke, 
 }
 
 export function drawStroke(ctx: CanvasRenderingContext2D, stroke: RasterStroke, width: number, height: number): void {
+  if (stroke.kind === "content-fill") {
+    if (!stroke.selection) return;
+    const image = ctx.getImageData(0, 0, width, height);
+    contentAwareFillPixels(image.data, width, height, stroke.selection, stroke.opacity, stroke.preserveAlpha);
+    ctx.putImageData(image, 0, 0);
+    return;
+  }
   if (stroke.kind === "filter") {
     if (!isLocalRetouchPreset(stroke.preset)) return;
     const image = ctx.getImageData(0, 0, width, height);
@@ -470,7 +478,7 @@ function initializeCanvas(canvas: HTMLCanvasElement, page: MangaPage): CanvasRen
 }
 
 function drawAlphaLockedStroke(ctx: CanvasRenderingContext2D, stroke: RasterStroke, width: number, height: number): void {
-  if (!stroke.preserveAlpha || stroke.blendMode === "destination-out" || stroke.kind === "filter") {
+  if (!stroke.preserveAlpha || stroke.blendMode === "destination-out" || stroke.kind === "filter" || stroke.kind === "content-fill") {
     drawStroke(ctx, stroke, width, height);
     return;
   }

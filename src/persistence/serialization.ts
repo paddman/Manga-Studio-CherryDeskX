@@ -259,7 +259,7 @@ function normalizeSelection(value: unknown): PixelSelectionShape | undefined {
 
 function normalizeStroke(value: unknown, index: number): RasterStroke | null {
   if (!isRecord(value)) return null;
-  const kind = value.kind === "line" || value.kind === "rectangle" || value.kind === "ellipse" || value.kind === "polygon" || value.kind === "fill" || value.kind === "gradient" || value.kind === "bucket" || value.kind === "erase-fill" || value.kind === "filter"
+  const kind = value.kind === "line" || value.kind === "rectangle" || value.kind === "ellipse" || value.kind === "polygon" || value.kind === "fill" || value.kind === "gradient" || value.kind === "bucket" || value.kind === "erase-fill" || value.kind === "filter" || value.kind === "content-fill"
     ? value.kind
     : "stroke";
   const blendMode = value.blendMode === "destination-out" || value.blendMode === "multiply" || value.blendMode === "screen" || value.blendMode === "overlay"

@@ -193,6 +193,7 @@ export function buildContiguousPixelSelection(
 }
 
 export function rasterStrokeKindForToolId(toolId: string): RasterStrokeKind {
+  if (toolId === "content-aware-fill") return "content-fill";
   if (["blur", "sharpen", "dodge", "burn", "sponge", "red-eye"].includes(toolId)) return "filter";
   if (["fill", "enclose-fill", "close-fill", "lasso-fill", "manga-tone", "screentone", "gradient-tone"].includes(toolId)) return "fill";
   if (toolId === "paint-bucket" || toolId === "contiguous-fill") return "bucket";

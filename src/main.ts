@@ -76,6 +76,7 @@ import { handleFontUploads, registerProjectFonts, removeEmbeddedFont } from "./e
 import { handleEditorKeydown } from "./editor/keyboard";
 import { createGestureController, pagePosition } from "./app/gestures";
 import type { BubbleVariant, ExportFormat, ExportScaleMode, ExportScope, LeftTab, PagePreset, PixelSelectionShape, RasterPoint, RasterStroke, TextAlign, Tool } from "./types";
+import { contentAwareFillPixels, contentAwareSelectionArea, MAX_LOCAL_CONTENT_AWARE_PIXELS } from "./editor/content-aware";
 
 const root = document.querySelector<HTMLDivElement>("#app");
 if (!root) throw new Error("Missing #app root");
@@ -305,6 +306,16 @@ function beginRasterStroke(event: PointerEvent, tool: Tool): void {
     showToast("ใช้ Lasso หรือ Marquee เลือกพื้นที่ก่อนเติมสี", "danger");
     return;
   }
+  if (tool === toolId("content-aware-fill")) {
+    if (!runtime.pixelSelection) {
+      showToast("เลือกพื้นที่ด้วย Lasso, Marquee หรือ Magic Wand ก่อนใช้ Content-Aware Fill", "danger");
+      return;
+    }
+    if (contentAwareSelectionArea(runtime.pixelSelection) > MAX_LOCAL_CONTENT_AWARE_PIXELS) {
+      showToast(`Content-Aware Fill แบบ local รองรับไม่เกิน ${MAX_LOCAL_CONTENT_AWARE_PIXELS.toLocaleString()} pixels ต่อครั้ง`, "danger");
+      return;
+    }
+  }
   let layer: ReturnType<typeof ensureRasterLayer>;
   try {
     layer = ensureRasterLayer();
@@ -340,13 +351,28 @@ function beginRasterStroke(event: PointerEvent, tool: Tool): void {
     mirrorAxis: kind === "stroke" && ruler?.kind === "symmetry" ? structuredClone(ruler) : undefined,
   };
   if (!activeRasterCanvas()) render();
-  if (kind === "fill" || kind === "bucket" || kind === "erase-fill") {
+  if (kind === "fill" || kind === "bucket" || kind === "erase-fill" || kind === "content-fill") {
+    if (kind === "content-fill" && stroke.selection) {
+      const canvas = activeRasterCanvas();
+      const context = canvas?.getContext("2d", { willReadFrequently: true });
+      if (!canvas || !context) {
+        releasePointer();
+        showToast("อ่าน Raster layer สำหรับ Content-Aware Fill ไม่สำเร็จ", "danger");
+        return;
+      }
+      const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data.slice();
+      if (!contentAwareFillPixels(pixels, canvas.width, canvas.height, stroke.selection, stroke.opacity, stroke.preserveAlpha)) {
+        releasePointer();
+        showToast("พื้นที่นี้ไม่มีสีขอบบน Raster layer ให้ใช้เติม", "danger");
+        return;
+      }
+    }
     recordRasterStroke(stroke);
     render();
     const canvas = activeRasterCanvas();
     if (canvas) void persistRasterCanvas(canvas);
     releasePointer();
-    showToast("เติมสีบน Raster layer แล้ว", "success");
+    showToast(kind === "content-fill" ? "เติมพื้นที่จากสีขอบแบบ local แล้ว" : "เติมสีบน Raster layer แล้ว", "success");
     return;
   }
   runtime.rasterPreview = stroke;

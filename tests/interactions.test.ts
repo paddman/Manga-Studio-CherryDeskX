@@ -89,6 +89,7 @@ describe("editor interactions", () => {
     expect(selectionModeForToolId("selection-pen")).toBe("lasso");
     expect(selectionModeForToolId("magic-wand")).toBeNull();
     expect(rasterStrokeKindForToolId("paint-bucket")).toBe("bucket");
+    expect(rasterStrokeKindForToolId("content-aware-fill")).toBe("content-fill");
     expect(rasterStrokeKindForToolId("contiguous-fill")).toBe("bucket");
     expect(rasterStrokeKindForToolId("magic-eraser")).toBe("erase-fill");
     expect(rasterStrokeKindForToolId("gradient")).toBe("gradient");
