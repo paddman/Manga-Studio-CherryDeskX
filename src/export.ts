@@ -57,6 +57,26 @@ function drawFittedImage(
   element: ImageElement,
 ): void {
   const { width, height, fit } = element;
+  const crop = element.crop;
+  const cropLeft = crop.left ?? 0;
+  const cropTop = crop.top ?? 0;
+  const cropWidth = crop.width ?? 1;
+  const cropHeight = crop.height ?? 1;
+  const hasSelection = cropLeft > 0.001 || cropTop > 0.001 || cropWidth < 0.999 || cropHeight < 0.999;
+  if (hasSelection) {
+    ctx.drawImage(
+      image,
+      image.naturalWidth * cropLeft,
+      image.naturalHeight * cropTop,
+      image.naturalWidth * cropWidth,
+      image.naturalHeight * cropHeight,
+      0,
+      0,
+      width,
+      height,
+    );
+    return;
+  }
   if (fit === "stretch") {
     const scaledWidth = width * element.crop.scale;
     const scaledHeight = height * element.crop.scale;

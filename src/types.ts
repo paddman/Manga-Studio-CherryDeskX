@@ -13,6 +13,10 @@ export interface CropSettings {
   x: number;
   y: number;
   scale: number;
+  left: number;
+  top: number;
+  width: number;
+  height: number;
 }
 
 export interface BubbleTail {

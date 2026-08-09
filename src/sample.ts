@@ -160,7 +160,7 @@ export function createImage(
     borderRadius: 0,
     grayscale: 0,
     contrast: 100,
-    crop: { x: 0.5, y: 0.5, scale: 1 },
+    crop: { x: 0.5, y: 0.5, scale: 1, left: 0, top: 0, width: 1, height: 1 },
   };
 }
 

@@ -137,7 +137,7 @@ export async function handleUploads(files: FileList | null, replaceSelected = fa
       if (replaceSelected && selected?.kind === "image") {
         selected.src = item.asset.src;
         selected.assetId = item.asset.id;
-        selected.crop = { x: 0.5, y: 0.5, scale: 1 };
+        setCropRect(selected, { left: 0, top: 0, width: 1, height: 1 });
         selected.name = item.asset.name;
         replaceSelected = false;
       } else {
@@ -387,12 +387,53 @@ export function detachSelectedImage(): boolean {
   return true;
 }
 
+export interface CropRect {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+}
+
+export function getCropRect(element: ImageElement): CropRect {
+  const width = clamp(element.crop.width ?? 1 / Math.max(1, element.crop.scale), 0.05, 1);
+  const height = clamp(element.crop.height ?? 1 / Math.max(1, element.crop.scale), 0.05, 1);
+  return {
+    left: clamp(element.crop.left ?? element.crop.x - width / 2, 0, 1 - width),
+    top: clamp(element.crop.top ?? element.crop.y - height / 2, 0, 1 - height),
+    width,
+    height,
+  };
+}
+
+export function setCropRect(element: ImageElement, next: CropRect): void {
+  const width = clamp(next.width, 0.05, 1);
+  const height = clamp(next.height, 0.05, 1);
+  const left = clamp(next.left, 0, 1 - width);
+  const top = clamp(next.top, 0, 1 - height);
+  element.crop = {
+    x: left + width / 2,
+    y: top + height / 2,
+    scale: clamp(1 / Math.min(width, height), 1, 5),
+    left,
+    top,
+    width,
+    height,
+  };
+}
+
 export function setCropValue(axis: "x" | "y" | "scale", value: number): void {
   const element = selectedElement();
   if (!element || element.kind !== "image") return;
   transact(() => {
-    if (axis === "scale") element.crop.scale = clamp(value, 1, 5);
-    else element.crop[axis] = clamp(value, 0, 1);
+    const current = getCropRect(element);
+    if (axis === "scale") {
+      const size = clamp(1 / clamp(value, 1, 5), 0.05, 1);
+      setCropRect(element, { left: element.crop.x - size / 2, top: element.crop.y - size / 2, width: size, height: size });
+    } else if (axis === "x") {
+      setCropRect(element, { ...current, left: clamp(value - current.width / 2, 0, 1 - current.width) });
+    } else {
+      setCropRect(element, { ...current, top: clamp(value - current.height / 2, 0, 1 - current.height) });
+    }
   });
 }
 
@@ -404,7 +445,7 @@ export function resetImageEdits(): void {
     element.grayscale = 0;
     element.contrast = 100;
     element.borderRadius = 0;
-    element.crop = { x: 0.5, y: 0.5, scale: 1 };
+    setCropRect(element, { left: 0, top: 0, width: 1, height: 1 });
     element.flipX = false;
     element.flipY = false;
   });

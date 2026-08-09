@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { alignSelected, clamp, distributeSelected, resetImageEdits } from "../src/editor/actions";
+import { alignSelected, clamp, distributeSelected, getCropRect, resetImageEdits, setCropRect } from "../src/editor/actions";
 import { runtime, selectedElements, setSelection } from "../src/editor/state";
 import { createImage, createPanel, createText } from "../src/sample";
 import type { MangaProject } from "../src/types";
@@ -44,7 +44,7 @@ describe("editor actions", () => {
     const image = createImage("รูป", "blob:test", 90, 120, 200, 180);
     image.grayscale = 75;
     image.contrast = 180;
-    image.crop = { x: 0.1, y: 0.9, scale: 2.5 };
+    image.crop = { x: 0.1, y: 0.9, scale: 2.5, left: 0.1, top: 0.2, width: 0.4, height: 0.5 };
     image.flipX = true;
     project.pages[0]!.elements.push(image);
     runtime.project = project;
@@ -54,7 +54,19 @@ describe("editor actions", () => {
     expect(image.y).toBe(120);
     expect(image.grayscale).toBe(0);
     expect(image.contrast).toBe(100);
-    expect(image.crop).toEqual({ x: 0.5, y: 0.5, scale: 1 });
+    expect(image.crop).toEqual({ x: 0.5, y: 0.5, scale: 1, left: 0, top: 0, width: 1, height: 1 });
     expect(image.flipX).toBe(false);
+  });
+
+  it("stores a bounded crop selection as normalized source coordinates", () => {
+    const project = testProject();
+    const image = createImage("รูป", "blob:test", 0, 0, 300, 200);
+    project.pages[0]!.elements.push(image);
+    runtime.project = project;
+    setSelection([image.id]);
+    setCropRect(image, { left: 0.2, top: 0.15, width: 0.5, height: 0.6 });
+    expect(getCropRect(image)).toEqual({ left: 0.2, top: 0.15, width: 0.5, height: 0.6 });
+    expect(image.crop.x).toBe(0.45);
+    expect(image.crop.y).toBeCloseTo(0.45);
   });
 });

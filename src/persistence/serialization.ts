@@ -94,6 +94,13 @@ function normalizeElement(value: unknown, index: number, assets: MangaAsset[]): 
     const sourceUrl = imageSource(source.src);
     const matchingAsset = assets.find((asset) => asset.src === sourceUrl);
     const cropSource = isRecord(source.crop) ? source.crop : {};
+    const cropScale = Math.max(1, numberValue(cropSource.scale, 1));
+    const cropWidth = Math.min(1, Math.max(0.05, numberValue(cropSource.width, 1 / cropScale)));
+    const cropHeight = Math.min(1, Math.max(0.05, numberValue(cropSource.height, 1 / cropScale)));
+    const cropX = Math.min(1, Math.max(0, numberValue(cropSource.x, 0.5)));
+    const cropY = Math.min(1, Math.max(0, numberValue(cropSource.y, 0.5)));
+    const cropLeft = Math.min(1 - cropWidth, Math.max(0, numberValue(cropSource.left, cropX - cropWidth / 2)));
+    const cropTop = Math.min(1 - cropHeight, Math.max(0, numberValue(cropSource.top, cropY - cropHeight / 2)));
     return {
       ...baseElement(source, "image", index),
       kind: "image",
@@ -104,9 +111,13 @@ function normalizeElement(value: unknown, index: number, assets: MangaAsset[]): 
       grayscale: numberValue(source.grayscale, 0),
       contrast: numberValue(source.contrast, 100),
       crop: {
-        x: Math.min(1, Math.max(0, numberValue(cropSource.x, 0.5))),
-        y: Math.min(1, Math.max(0, numberValue(cropSource.y, 0.5))),
-        scale: Math.max(1, numberValue(cropSource.scale, 1)),
+        x: cropLeft + cropWidth / 2,
+        y: cropTop + cropHeight / 2,
+        scale: Math.max(1, 1 / Math.min(cropWidth, cropHeight)),
+        left: cropLeft,
+        top: cropTop,
+        width: cropWidth,
+        height: cropHeight,
       },
     } satisfies ImageElement;
   }

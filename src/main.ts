@@ -24,6 +24,7 @@ import {
   duplicatePage,
   duplicateSelected,
   flipSelected,
+  getCropRect,
   groupSelected,
   handleUploads,
   moveLayer,
@@ -34,6 +35,7 @@ import {
   setPageProperty,
   setProjectProperty,
   setCropValue,
+  setCropRect,
   setHierarchyName,
   setSelectedProperty,
   smartLayout,
@@ -172,7 +174,7 @@ function snapDraggedItems(items: DragItem[]): void {
 function beginMove(event: PointerEvent, element: MangaElement, node: HTMLElement): void {
   if (element.locked || runtime.preferences.tool !== "select") return;
   if (runtime.preferences.cropElementId === element.id && element.kind === "image") {
-    beginCrop(event, element, node);
+    beginCropMove(event, element, node);
     return;
   }
   const elements = selectedElements().filter((candidate) => !candidate.locked);
@@ -235,20 +237,47 @@ function beginMove(event: PointerEvent, element: MangaElement, node: HTMLElement
   window.addEventListener("pointerup", end, { once: true });
 }
 
-function beginCrop(event: PointerEvent, element: ImageElement, node: HTMLElement): void {
+function beginCropMove(event: PointerEvent, element: ImageElement, node: HTMLElement): void {
   checkpoint();
-  const startX = element.crop.x;
-  const startY = element.crop.y;
+  const start = getCropRect(element);
+  const nodeRect = node.getBoundingClientRect();
   const move = (moveEvent: PointerEvent): void => {
-    element.crop.x = clamp(startX - (moveEvent.clientX - event.clientX) / Math.max(1, node.clientWidth * runtime.preferences.zoom), 0, 1);
-    element.crop.y = clamp(startY - (moveEvent.clientY - event.clientY) / Math.max(1, node.clientHeight * runtime.preferences.zoom), 0, 1);
-    const image = node.querySelector<HTMLImageElement>("img");
-    if (image) image.style.objectPosition = `${element.crop.x * 100}% ${element.crop.y * 100}%`;
+    const dx = (moveEvent.clientX - event.clientX) / Math.max(1, nodeRect.width);
+    const dy = (moveEvent.clientY - event.clientY) / Math.max(1, nodeRect.height);
+    setCropRect(element, { ...start, left: start.left + dx, top: start.top + dy });
   };
   const end = (): void => {
     window.removeEventListener("pointermove", move);
     persistProject();
     rerender("ปรับ Crop แล้ว");
+  };
+  window.addEventListener("pointermove", move);
+  window.addEventListener("pointerup", end, { once: true });
+}
+
+function beginCropResize(event: PointerEvent, element: ImageElement, node: HTMLElement, handle: string): void {
+  checkpoint();
+  const start = getCropRect(element);
+  const nodeRect = node.getBoundingClientRect();
+  const startRight = start.left + start.width;
+  const startBottom = start.top + start.height;
+  const move = (moveEvent: PointerEvent): void => {
+    const dx = (moveEvent.clientX - event.clientX) / Math.max(1, nodeRect.width);
+    const dy = (moveEvent.clientY - event.clientY) / Math.max(1, nodeRect.height);
+    let left = start.left;
+    let top = start.top;
+    let right = startRight;
+    let bottom = startBottom;
+    if (handle.includes("w")) left = clamp(start.left + dx, 0, startRight - 0.05);
+    if (handle.includes("e")) right = clamp(startRight + dx, start.left + 0.05, 1);
+    if (handle.includes("n")) top = clamp(start.top + dy, 0, startBottom - 0.05);
+    if (handle.includes("s")) bottom = clamp(startBottom + dy, start.top + 0.05, 1);
+    setCropRect(element, { left, top, width: right - left, height: bottom - top });
+  };
+  const end = (): void => {
+    window.removeEventListener("pointermove", move);
+    persistProject();
+    rerender("เลือกพื้นที่ Crop แล้ว");
   };
   window.addEventListener("pointermove", move);
   window.addEventListener("pointerup", end, { once: true });
@@ -750,6 +779,29 @@ appRoot.addEventListener("pointerdown", (event) => {
   if (runtime.preferences.tool === "hand" && target.closest("[data-stage-viewport]")) {
     event.preventDefault();
     beginPan(event);
+    return;
+  }
+
+  const cropHandle = target.closest<HTMLElement>("[data-crop-resize]");
+  if (cropHandle) {
+    event.preventDefault();
+    event.stopPropagation();
+    const node = cropHandle.closest<HTMLElement>("[data-element-id]");
+    const element = node ? activePage().elements.find((item) => item.id === node.dataset.elementId) : null;
+    if (node && element?.kind === "image") beginCropResize(event, element, node, cropHandle.dataset.cropResize ?? "se");
+    return;
+  }
+
+  const cropSelection = target.closest<HTMLElement>("[data-crop-move]");
+  if (cropSelection) {
+    event.preventDefault();
+    event.stopPropagation();
+    const node = cropSelection.closest<HTMLElement>("[data-element-id]");
+    const element = node ? activePage().elements.find((item) => item.id === node.dataset.elementId) : null;
+    if (node && element?.kind === "image") {
+      setSelection([element.id]);
+      beginCropMove(event, element, node);
+    }
     return;
   }
 
