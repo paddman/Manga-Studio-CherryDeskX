@@ -1,0 +1,17 @@
+{
+  "name": "Cherry Manga Studio",
+  "short_name": "Manga Studio",
+  "description": "Web editor for arranging, resizing, decorating and exporting manga pages.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#121019",
+  "theme_color": "#121019",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

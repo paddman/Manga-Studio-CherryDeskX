@@ -1,0 +1,7 @@
+services:
+  manga-studio:
+    build: .
+    container_name: cherry-manga-studio
+    restart: unless-stopped
+    ports:
+      - "8088:80"
