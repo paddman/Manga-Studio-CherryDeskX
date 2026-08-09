@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { fittedFontSize } from "../src/editor/typography";
+import { fittedFontSize, wrapTextLines } from "../src/editor/typography";
 
 describe("typography engine", () => {
   it("keeps the requested font size when content fits", () => {
@@ -14,5 +14,17 @@ describe("typography engine", () => {
     expect(horizontal).toBeLessThan(46);
     expect(vertical).toBeGreaterThanOrEqual(8);
     expect(vertical).toBeLessThan(40);
+  });
+
+  it("applies Japanese kinsoku rules while preserving Thai word wrapping", () => {
+    const measure = (value: string): number => [...value].length * 10;
+    const japanese = wrapTextLines("「猫」、走る。", 30, measure);
+    expect(japanese.every((line) => !/^[」、。]/u.test(line))).toBe(true);
+    expect(japanese.every((line) => !/[「]$/u.test(line))).toBe(true);
+    expect(japanese.join("")).toBe("「猫」、走る。");
+
+    const thai = wrapTextLines("แมว วิ่งเร็ว", 45, measure);
+    expect(thai.join("")).toBe("แมววิ่งเร็ว");
+    expect(thai.length).toBeGreaterThan(1);
   });
 });

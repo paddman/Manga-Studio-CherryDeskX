@@ -12,7 +12,7 @@ import type {
 } from "./types";
 import { renderRasterLayer } from "./editor/raster";
 import { isRasterLayer, orderedPageLayers } from "./editor/layers";
-import { fittedFontSize } from "./editor/typography";
+import { fittedFontSize, wrapTextLines } from "./editor/typography";
 
 export type ExportFormat = ProjectExportFormat;
 export type ExportScope = ProjectExportScope;
@@ -149,46 +149,13 @@ function drawFittedImage(
   ctx.drawImage(image, x + cropX, y + cropY, scaledWidth, scaledHeight);
 }
 
-function segmentText(text: string): string[] {
-  try {
-    const segmenter = new Intl.Segmenter("th", { granularity: "word" });
-    return [...segmenter.segment(text)].map((part) => part.segment);
-  } catch {
-    return [...text];
-  }
-}
-
 function wrapText(
   ctx: CanvasRenderingContext2D,
   text: string,
   maxWidth: number,
   letterSpacing = 0,
 ): string[] {
-  const paragraphs = text.split("\n");
-  const lines: string[] = [];
-
-  for (const paragraph of paragraphs) {
-    if (!paragraph) {
-      lines.push("");
-      continue;
-    }
-
-    const segments = segmentText(paragraph);
-    let line = "";
-    for (const segment of segments) {
-      const candidate = `${line}${segment}`;
-      const measuredWidth = ctx.measureText(candidate).width + Math.max(0, [...candidate].length - 1) * letterSpacing;
-      if (line && measuredWidth > maxWidth) {
-        lines.push(line.trimEnd());
-        line = segment.trimStart();
-      } else {
-        line = candidate;
-      }
-    }
-    if (line) lines.push(line.trimEnd());
-  }
-
-  return lines;
+  return wrapTextLines(text, maxWidth, (value) => ctx.measureText(value).width, letterSpacing);
 }
 
 function drawTextLine(ctx: CanvasRenderingContext2D, line: string, x: number, y: number, letterSpacing: number, outlineWidth: number): void {

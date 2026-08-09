@@ -37,6 +37,7 @@ A pointer drag calls `checkpoint()` once at pointer-down and persists once at po
 - `MangaPage.rasterLayers` and `layerOrder` form one low-to-high stack shared by editor, inspector, archive and export.
 - Raster strokes are replayable Canvas commands. They support geometric and contiguous selections, fill/erase, alpha lock, optional masks, manga tones/effect lines and moving the latest stroke to a new layer.
 - Browser guardrails reject unsafe full-resolution canvas dimensions with a readable Thai error instead of crashing the tab.
+- Thai/Latin word segmentation and basic Japanese kinsoku wrapping live in `typography.ts`, so auto-fit and exported lettering make the same line-break decisions.
 
 ## Persistence and integration
 
