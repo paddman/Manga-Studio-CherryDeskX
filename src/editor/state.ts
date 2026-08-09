@@ -1,7 +1,8 @@
 import { createStarterProject } from "../sample";
 import { createPersistenceRepositories, type PersistenceRepositories } from "../persistence/repository";
 import { hydrateAssetSources, migrateProject, serializeProject } from "../persistence/serialization";
-import type { EditorPreferences, MangaElement, MangaPage, MangaProject, SelectionGuide } from "../types";
+import { toolId } from "./tools";
+import type { EditorPreferences, MangaElement, MangaPage, MangaProject, PixelSelectionShape, RasterStroke, SelectionGuide } from "../types";
 
 const PREFS_KEY = "cherry-manga-studio.preferences.v2";
 const LEGACY_PREFS_KEY = "cherry-manga-studio.preferences.v1";
@@ -29,6 +30,8 @@ export interface RuntimeState {
   saveStatus: SaveStatus;
   selectionGuides: SelectionGuide[];
   selectionRectangle: SelectionRectangle | null;
+  pixelSelection: PixelSelectionShape | null;
+  rasterPreview: RasterStroke | null;
   assetSources: Map<string, string>;
   persistence: PersistenceRepositories;
   persistenceReady: boolean;
@@ -42,8 +45,12 @@ function loadPreferences(): EditorPreferences {
     showSafeArea: true,
     preview: false,
     leftTab: "assets",
-    tool: "select",
+    tool: toolId("select"),
     cropElementId: null,
+    brushColor: "#17131f",
+    brushSize: 18,
+    brushOpacity: 0.85,
+    activeRasterLayerId: null,
   };
   if (typeof localStorage === "undefined") return defaults;
   try {
@@ -53,6 +60,7 @@ function loadPreferences(): EditorPreferences {
     return {
       ...defaults,
       ...parsed,
+      tool: typeof parsed.tool === "string" ? toolId(parsed.tool) : defaults.tool,
       cropElementId: null,
     };
   } catch {
@@ -81,6 +89,8 @@ export const runtime: RuntimeState = {
   saveStatus: "saved",
   selectionGuides: [],
   selectionRectangle: null,
+  pixelSelection: null,
+  rasterPreview: null,
   assetSources: new Map<string, string>(),
   persistence: createPersistenceRepositories(),
   persistenceReady: false,

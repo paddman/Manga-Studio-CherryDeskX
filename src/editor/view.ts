@@ -7,8 +7,10 @@ import type {
   TextAlign,
   TextElement,
   ImageElement,
+  RasterLayer,
 } from "../types";
 import { getCropRect } from "./actions";
+import { TOOL_DEFINITIONS, TOOL_GROUP_LABELS, type ToolGroup } from "./tools";
 import { activePage, runtime, selectedElement } from "./state";
 
 function escapeHtml(value: string): string {
@@ -109,6 +111,7 @@ export function renderApp(): string {
 function renderLeftSidebar(): string {
   return `
     <aside class="left-sidebar">
+      ${renderToolbox()}
       <nav class="left-tabs" aria-label="เครื่องมือ">
         ${leftTab("assets", "image", "รูปภาพ")}
         ${leftTab("panels", "panel", "ช่อง")}
@@ -118,6 +121,19 @@ function renderLeftSidebar(): string {
       <div class="left-content">${renderLeftContent()}</div>
     </aside>
   `;
+}
+
+function renderToolbox(): string {
+  const groups = Object.keys(TOOL_GROUP_LABELS) as ToolGroup[];
+  return `<nav class="toolbox" aria-label="Photoshop style toolbox"><div class="toolbox-title">TOOLS</div>${groups.map((groupName) => {
+    const tools = TOOL_DEFINITIONS.filter((tool) => tool.group === groupName);
+    return `<details class="tool-group" ${groupName === "navigation" || groupName === "drawing" ? "open" : ""}><summary>${TOOL_GROUP_LABELS[groupName]}<span>${tools.length}</span></summary><div class="tool-group-items">${tools.map((tool) => {
+      const disabled = tool.capability === "disabled" || tool.capability === "adapter";
+      const status = tool.capability === "experimental" ? "ทดลอง" : tool.capability === "adapter" ? "adapter" : tool.capability === "disabled" ? "ปิด" : "พร้อม";
+      const reason = tool.reason ? `${tool.reason}${tool.phase ? ` • ${tool.phase}` : ""}` : "พร้อมใช้งานใน browser";
+      return `<button class="tool-entry capability-${tool.capability} ${runtime.preferences.tool === tool.id ? "is-active" : ""}" data-tool="${tool.id}" ${disabled ? "disabled" : ""} title="${escapeHtml(`${tool.labelTh} • ${tool.labelEn} — ${reason}`)}" aria-label="${escapeHtml(`${tool.labelTh} ${tool.labelEn}`)}"><span class="tool-entry-icon">${tool.labelEn.slice(0, 1)}</span><span class="tool-entry-label"><b>${escapeHtml(tool.labelTh)}</b><small>${escapeHtml(tool.labelEn)}</small></span><em>${status}</em></button>`;
+    }).join("")}</div></details>`;
+  }).join("")}</nav>`;
 }
 
 function leftTab(tab: LeftTab, iconName: string, label: string): string {
@@ -211,6 +227,9 @@ function renderStage(): string {
   const rectangle = runtime.selectionRectangle
     ? `<div class="selection-rectangle" style="left:${runtime.selectionRectangle.x}px;top:${runtime.selectionRectangle.y}px;width:${runtime.selectionRectangle.width}px;height:${runtime.selectionRectangle.height}px"></div>`
     : "";
+  const pixelSelection = runtime.pixelSelection
+    ? `<div class="pixel-selection selection-mode-${runtime.pixelSelection.mode}" style="left:${runtime.pixelSelection.x}px;top:${runtime.pixelSelection.y}px;width:${runtime.pixelSelection.width}px;height:${runtime.pixelSelection.height}px"></div>`
+    : "";
   return `
     <section class="stage-column">
       <div class="stage-meta"><div><span class="page-name">${escapeHtml(page.name)}</span><span>${page.width} × ${page.height}px</span></div><div class="stage-hint">ลากเพื่อขยับ • ดึงจุดเพื่อย่อ/ขยาย • ปุ่มบนเพื่อหมุน</div></div>
@@ -218,7 +237,7 @@ function renderStage(): string {
         ${image ? `<div class="stage-image-toolbar" aria-label="เครื่องมือแต่งรูป"><strong>แก้ไขรูป</strong><button data-action="enter-crop">${prefs.cropElementId === image.id ? "เสร็จสิ้น Crop" : "เลือกพื้นที่ Crop"}</button><button data-action="replace-image">เปลี่ยนรูป</button><button data-action="reset-image-edits">รีเซ็ต</button></div>` : ""}
         <div class="canvas-sizer" style="width:${Math.round(page.width * prefs.zoom)}px;height:${Math.round(page.height * prefs.zoom)}px">
           <div id="pageCanvas" class="page-canvas ${prefs.showGrid ? "show-grid" : ""}" data-page-canvas style="width:${page.width}px;height:${page.height}px;background:${page.background};transform:scale(${prefs.zoom})">
-            ${prefs.showSafeArea ? `<div class="safe-area"></div>` : ""}${guides}${rectangle}${elements}
+            ${prefs.showSafeArea ? `<div class="safe-area"></div>` : ""}<canvas class="raster-canvas" data-raster-canvas width="${page.width}" height="${page.height}"></canvas>${guides}${rectangle}${pixelSelection}${elements}
           </div>
         </div>
       </div>
@@ -274,7 +293,12 @@ function transformHandles(): string {
 }
 
 function renderRightSidebar(element: MangaElement | null): string {
-  return `<aside class="right-sidebar"><div class="right-scroll">${element ? renderElementInspector(element) : renderPageInspector()}${renderLayersPanel()}</div></aside>`;
+  const raster = activePage().rasterLayers.find((layer) => layer.id === runtime.selectedId) ?? null;
+  return `<aside class="right-sidebar"><div class="right-scroll">${element ? renderElementInspector(element) : raster ? renderRasterInspector(raster) : renderPageInspector()}${renderLayersPanel()}</div></aside>`;
+}
+
+function renderRasterInspector(layer: RasterLayer): string {
+  return `<section class="inspector-section"><div class="inspector-heading"><div><span class="eyebrow">RASTER LAYER</span><h2>${escapeHtml(layer.name)}</h2></div><span class="beta-badge">LOCAL</span></div><p class="sidebar-note">วาดด้วย Canvas ที่ความละเอียดเดียวกับ Page และบันทึก binary snapshot ใน IndexedDB</p><label class="field-block"><span>สีแปรง</span><div class="color-input-wrap"><input type="color" data-brush-pref="color" value="${escapeHtml(runtime.preferences.brushColor)}"/><code>${escapeHtml(runtime.preferences.brushColor)}</code></div></label><label class="field-block"><span>ขนาด <output>${runtime.preferences.brushSize}px</output></span><input type="range" data-brush-pref="size" min="1" max="240" step="1" value="${runtime.preferences.brushSize}"/></label><label class="field-block"><span>ความทึบ <output>${Math.round(runtime.preferences.brushOpacity * 100)}%</output></span><input type="range" data-brush-pref="opacity" min="0.05" max="1" step="0.01" value="${runtime.preferences.brushOpacity}"/></label><label class="toggle-field"><input type="checkbox" data-raster-alpha-lock ${layer.alphaLock ? "checked" : ""}/><span>ล็อกอัลฟา</span></label><div class="sidebar-note">Preset ปัจจุบันเลือกจาก Photoshop-style toolbox ทางซ้าย • ${layer.strokes.length} stroke</div></section>`;
 }
 
 function renderPageInspector(): string {
@@ -374,13 +398,20 @@ function option(value: string, label: string, current: string): string {
 }
 
 function renderLayersPanel(): string {
-  const elements = [...activePage().elements].reverse();
+  const page = activePage();
+  const entries = [
+    ...page.rasterLayers.map((layer) => ({ id: layer.id, name: layer.name, kind: "raster" as const, hidden: layer.hidden, locked: layer.locked })),
+    ...page.elements.map((element) => ({ id: element.id, name: element.name, kind: element.kind, hidden: element.hidden, locked: element.locked })),
+  ];
+  const byId = new Map(entries.map((entry) => [entry.id, entry]));
+  const layers = [...page.layerOrder.map((id) => byId.get(id)).filter((entry): entry is (typeof entries)[number] => entry !== undefined), ...entries.filter((entry) => !page.layerOrder.includes(entry.id))].reverse();
   return `
     <section class="layers-section">
-      <div class="inspector-heading sticky-heading"><div><span class="eyebrow">STACK</span><h2>เลเยอร์</h2></div><span class="count-badge">${elements.length}</span></div>
-      <div class="layers-list">${elements
+      <div class="inspector-heading sticky-heading"><div><span class="eyebrow">STACK</span><h2>เลเยอร์</h2></div><span class="count-badge">${layers.length}</span></div>
+      <div class="layer-actions"><button data-action="add-raster-layer">+ Raster Layer</button><button data-action="clear-raster-layer">ล้างเลเยอร์</button></div>
+      <div class="layers-list">${layers
         .map(
-          (element) => `<div class="layer-row ${element.id === runtime.selectedId ? "is-active" : ""}" data-layer-id="${element.id}"><button class="layer-visibility" data-layer-visibility="${element.id}">${icon(element.hidden ? "hidden" : "eye")}</button><span class="layer-kind">${icon(element.kind === "image" ? "image" : element.kind === "panel" ? "panel" : element.kind === "text" ? "text" : "bubble")}</span><span class="layer-name">${escapeHtml(element.name)}</span><button class="layer-lock" data-layer-lock="${element.id}">${icon(element.locked ? "lock" : "unlock")}</button></div>`,
+          (layer) => `<div class="layer-row ${layer.id === runtime.selectedId ? "is-active" : ""}" data-layer-id="${layer.id}"><button class="layer-visibility" data-layer-visibility="${layer.id}">${icon(layer.hidden ? "hidden" : "eye")}</button><span class="layer-kind">${icon(layer.kind === "image" ? "image" : layer.kind === "panel" ? "panel" : layer.kind === "text" ? "text" : layer.kind === "bubble" ? "bubble" : "brush")}</span><span class="layer-name">${escapeHtml(layer.name)}</span><button class="layer-lock" data-layer-lock="${layer.id}">${icon(layer.locked ? "lock" : "unlock")}</button></div>`,
         )
         .join("")}</div>
     </section>

@@ -7,7 +7,56 @@ export type PagePreset = "manga-b5" | "manga-a5" | "comic" | "a4" | "webtoon" | 
 export type ColorMode = "rgb" | "cmyk";
 export type WritingMode = "horizontal" | "vertical";
 
-export const PROJECT_SCHEMA_VERSION = 2;
+export const PROJECT_SCHEMA_VERSION = 3;
+
+export type ToolId = string & { readonly __toolId: unique symbol };
+export type Tool = ToolId;
+
+export type RasterStrokeKind = "stroke" | "line" | "rectangle" | "ellipse" | "polygon" | "fill" | "gradient";
+export type RasterBlendMode = "source-over" | "destination-out" | "multiply" | "screen" | "overlay";
+
+export interface RasterPoint {
+  x: number;
+  y: number;
+  pressure: number;
+}
+
+export interface PixelSelectionShape {
+  mode: "rectangle" | "ellipse" | "lasso" | "polygon";
+  points: RasterPoint[];
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface RasterStroke {
+  id: string;
+  kind: RasterStrokeKind;
+  preset: string;
+  points: RasterPoint[];
+  color: string;
+  size: number;
+  opacity: number;
+  blendMode: RasterBlendMode;
+  rotation?: number;
+  selection?: PixelSelectionShape;
+}
+
+export interface RasterLayer {
+  id: string;
+  kind: "raster";
+  name: string;
+  width: number;
+  height: number;
+  opacity: number;
+  hidden: boolean;
+  locked: boolean;
+  alphaLock: boolean;
+  blendMode: RasterBlendMode;
+  strokes: RasterStroke[];
+  bitmapKey?: string;
+}
 
 export interface CropSettings {
   x: number;
@@ -118,6 +167,8 @@ export interface MangaPage {
   height: number;
   background: string;
   elements: MangaElement[];
+  rasterLayers: RasterLayer[];
+  layerOrder: string[];
   volumeId: string;
   chapterId: string;
   order: number;
@@ -163,8 +214,6 @@ export interface MangaProject {
 }
 
 export type LeftTab = "assets" | "panels" | "text" | "ai";
-export type Tool = "select" | "hand";
-
 export interface EditorPreferences {
   zoom: number;
   showGrid: boolean;
@@ -173,6 +222,10 @@ export interface EditorPreferences {
   leftTab: LeftTab;
   tool: Tool;
   cropElementId: string | null;
+  brushColor: string;
+  brushSize: number;
+  brushOpacity: number;
+  activeRasterLayerId: string | null;
 }
 
 export interface SelectionGuide {
